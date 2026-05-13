@@ -1,7 +1,7 @@
 flask
 line-bot-sdk
 google-cloud-vision
-pandas
-openpyxl
+google-auth
+supabase
 python-dotenv
 gunicorn
