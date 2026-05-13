@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import uuid
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import MessageEvent, ImageMessage, TextSendMessage
@@ -10,42 +11,22 @@ from supabase import create_client, Client
 
 app = Flask(__name__)
 
-# --- 1. โหลด Config และตั้งค่าความปลอดภัย ---
-def get_env_or_warn(key):
-    val = os.getenv(key)
-    if not val:
-        print(f"⚠️ Warning: {key} is missing!")
-    return val
+# --- 1. การตั้งค่าเริ่มต้น ---
+line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
+handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
 
-# LINE Config
-line_bot_api = LineBotApi(get_env_or_warn('LINE_CHANNEL_ACCESS_TOKEN'))
-handler = WebhookHandler(get_env_or_warn('LINE_CHANNEL_SECRET'))
+# Google Vision
+creds_dict = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
+creds = service_account.Credentials.from_service_account_info(creds_dict)
+vision_client = vision.ImageAnnotatorClient(credentials=creds)
 
-# Google Vision Config (ป้องกันแอปบึ้มถ้า JSON ผิด)
-vision_client = None
-google_creds_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
-if google_creds_json:
-    try:
-        creds_dict = json.loads(google_creds_json)
-        creds = service_account.Credentials.from_service_account_info(creds_dict)
-        vision_client = vision.ImageAnnotatorClient(credentials=creds)
-    except Exception as e:
-        print(f"❌ Vision API Error: {e}")
+# Supabase
+supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_ANON_KEY"))
 
-# Supabase Config (ป้องกันแอปบึ้มถ้า URL/Key หาย)
-supabase = None
-s_url = os.getenv("SUPABASE_URL")
-s_key = os.getenv("SUPABASE_ANON_KEY")
-if s_url and s_key:
-    try:
-        supabase: Client = create_client(s_url, s_key)
-    except Exception as e:
-        print(f"❌ Supabase Error: {e}")
-
-# --- 2. ฟังก์ชันช่วยประมวลผล (Utility) ---
+# --- 2. ฟังก์ชันช่วยค้นหายอดเงิน ---
 def extract_amount(text):
-    """ ค้นหายอดเงินจากข้อความด้วย Regex """
     if not text: return None
+    # ดักจับรูปแบบยอดเงินทั่วไปในสลิปไทยและอังกฤษ
     patterns = [
         r'(?:จำนวนเงิน|ยอดเงิน|Amount|Total|Net Amount)\s*[:\-]?\s*([\d,]+\.\d{2})',
         r'([\d,]+\.\d{2})\s*(?:บาท|Baht|THB)'
@@ -56,7 +37,6 @@ def extract_amount(text):
             return float(match.group(1).replace(',', ''))
     return None
 
-# --- 3. Routes & Webhook ---
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers.get('X-Line-Signature', '')
@@ -67,51 +47,69 @@ def callback():
         abort(400)
     return 'OK'
 
+# --- 3. ส่วนประมวลผลรูปภาพสลิป ---
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
-    # ตรวจสอบความพร้อมของระบบ
-    if not vision_client or not supabase:
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ ระบบ Backend ไม่พร้อมใช้งาน กรุณาเช็คการตั้งค่า"))
-        return
+    user_id = event.source.user_id
 
-    # 1. ดึงข้อมูลรูปภาพจาก LINE
+    # A. ค้นหา Active Trip ของผู้ใช้ (อ้างอิงจากตาราง trips)
+    trip_res = supabase.table("trips").select("id").eq("line_user_id", user_id).eq("status", "active").execute()
+    
+    if not trip_res.data:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ ไม่พบทริปที่กำลังใช้งาน พิมพ์ /newtrip เพื่อเริ่มทริปก่อนนะครับ"))
+        return
+    
+    trip_id = trip_res.data[0]['id']
+
+    # B. ดึงรูปภาพจาก LINE และทำ OCR ด้วย Google Vision
     message_content = line_bot_api.get_message_content(event.message.id)
     image_bytes = b''.join(message_content.iter_content())
-
-    # 2. ส่งให้ Google Vision ทำ OCR
+    
     image = vision.Image(content=image_bytes)
     response = vision_client.text_detection(image=image)
     texts = response.text_annotations
     
     if not texts:
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="อ่านรูปไม่ได้ครับ รบกวนส่งสลิปที่ชัดเจนกว่านี้"))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ อ่านข้อมูลรูปภาพไม่ได้ครับ"))
         return
 
     full_text = texts[0].description
     amount = extract_amount(full_text)
 
-    # 3. บันทึกข้อมูลลง Supabase
     if amount is not None:
         try:
-            # ดึงชื่อ Profile (ถ้าดึงไม่ได้ให้ใช้ 'Anonymous')
-            try:
-                profile = line_bot_api.get_profile(event.source.user_id)
-                user_name = profile.display_name
-            except:
-                user_name = "Anonymous"
+            # C. อัปโหลดรูปไปที่ Supabase Storage (Bucket: slips)
+            # ตั้งชื่อไฟล์เป็น ID ข้อความเพื่อไม่ให้ซ้ำ และเก็บใน Folder ตามทริป
+            file_path = f"trips/{trip_id}/{event.message.id}.jpg"
+            
+            supabase.storage.from_('slips').upload(
+                path=file_path,
+                file=image_bytes,
+                file_options={"content-type": "image/jpeg"}
+            )
 
+            # ดึง URL ของรูปที่อัปโหลด
+            slip_url = supabase.storage.from_('slips').get_public_url(file_path)
+
+            # D. บันทึกข้อมูลลงตาราง expenses (ตรงตาม Schema ในรูปของคุณ)
             data = {
-                "user_name": str(user_name),
+                "trip_id": trip_id,
+                "line_user_id": user_id,
                 "amount": amount,
-                "user_id": event.source.user_id
+                "slip_url": slip_url,
+                "raw_ocr_data": {"full_text": full_text},
+                "item_name": "บันทึกจากสลิป" # สามารถปรับเป็น Logic ค้นหาชื่อร้านค้าเพิ่มเติมได้
             }
+            
             supabase.table("expenses").insert(data).execute()
-            reply = f"✅ บันทึกสำเร็จ!\nผู้จ่าย: {user_name}\nยอดเงิน: {amount:,.2f} บาท"
+            
+            reply = f"✅ บันทึกสำเร็จ!\n💰 ยอดเงิน: {amount:,.2f} บาท\n📂 ทริป ID: {trip_id}"
+            
         except Exception as e:
-            reply = f"⚠️ อ่านยอดได้ {amount:,.2f} บาท แต่เซฟลง Database ไม่สำเร็จ"
-            print(f"Database Insert Error: {e}")
+            reply = f"⚠️ พบยอดเงิน {amount:,.2f} บาท แต่บันทึกลงระบบไม่ได้"
+            print(f"Error: {e}")
     else:
-        reply = "❌ ไม่พบยอดเงินในรูปภาพ โปรดลองใหม่อีกครั้ง"
+        reply = "❓ ระบบไม่พบยอดเงินในสลิปใบนี้ กรุณาพิมพ์บันทึกเองนะครับ"
 
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
 
