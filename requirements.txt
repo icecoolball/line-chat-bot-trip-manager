@@ -1,7 +1,6 @@
+gunicorn
 flask
 line-bot-sdk
 google-cloud-vision
 google-auth
 supabase
-python-dotenv
-gunicorn
