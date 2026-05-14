@@ -72,6 +72,7 @@ def extract_amount(text):
     return None
 
 def create_menu_flex():
+    # แก้ไขล่าสุด: ลบช่องว่างเกินใน key/value ของ dictionary เพื่อป้องกัน JSON error
     return {
         "type": "bubble",
         "header": {
@@ -88,7 +89,7 @@ def create_menu_flex():
             "spacing": "md",
             "contents": [
                 {"type": "button", "style": "primary", "color": "#1DB446", "action": {"type": "message", "label": "🚀 เริ่มทริปใหม่", "text": "ทริป"}},
-                {"type": "button", "style": "secondary", "action": {"type": "message", "label": "📊 สรุปยอดรวม", "text": "ยอดรวม"}},
+                {"type": "button", "style": "secondary", "action": {"type": "message", "label": " สรุปยอดรวม", "text": "ยอดรวม"}},
                 {"type": "button", "style": "secondary", "action": {"type": "message", "label": "💰 หารค่าใช้จ่าย", "text": "หาร"}},
                 {"type": "button", "style": "link", "color": "#FF5555", "action": {"type": "message", "label": " ปิดทริป", "text": "ปิดทริป"}}
             ]
@@ -130,45 +131,57 @@ def handle_text(event):
         
         # แก้ไขล่าสุด: เข้าสู่สถานะรอจำนวนคนเพื่อสรุปยอด
         user_state[user_id] = {"action": "waiting_final_split", "trip_id": trip_info['id'], "trip_name": trip_info['trip_name']}
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip_info['trip_name']}\n กรุณาระบุจำนวนคนที่จะหารยอดรวมครับ: "))
+        logger.info(f"User {user_id} entered waiting_final_split state for trip {trip_info['trip_name']}")
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip_info['trip_name']}\n👥 กรุณาระบุจำนวนคนที่จะหารยอดรวมครับ (เช่น 2, 3 คน, สองคน): "))
         return
 
     if current_state == "waiting_final_split":
-        if not text.isdigit():
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ กรุณาระบุเป็นตัวเลขจำนวนคนครับ"))
+        # แก้ไขล่าสุด: ดึงตัวเลขจากข้อความ ไม่ว่าจะพิมพ์ "2", "2 คน", "สองคน", "2 people"
+        num_match = re.search(r'\d+', text)
+        if not num_match:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ กรุณาระบุเป็นตัวเลขจำนวนคนครับ (เช่น 2, 3, 4)"))
             return
         
-        num_people = int(text)
+        num_people = int(num_match.group())
+        if num_people <= 0:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ จำนวนคนต้องมากกว่า 0 ครับ"))
+            return
+        
         trip_id = user_state[user_id]["trip_id"]
         trip_name = user_state[user_id]["trip_name"]
-        user_state.pop(user_id, None)
+        user_state.pop(user_id, None)  # เคลียร์สถานะ
+
+        logger.info(f"User {user_id} finalized trip {trip_name} with {num_people} people")
 
         # แก้ไขล่าสุด: ดึงข้อมูลมาสร้างสรุปและไฟล์ Excel
         res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
-        if res.data:
-            df = pd.DataFrame(res.data)
-            total = df['amount'].sum()
-            avg = total / num_people
+        if not res.data:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=" ไม่มีรายการค่าใช้จ่ายในทริปนี้"))
+            return
+        
+        df = pd.DataFrame(res.data)
+        total = df['amount'].sum()
+        avg = total / num_people
 
-            # สร้าง Excel ใน Memory
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df[['item_name', 'amount', 'created_at']].to_excel(writer, index=False, sheet_name='Summary')
-            excel_data = output.getvalue()
+        # สร้าง Excel ใน Memory
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df[['item_name', 'amount', 'created_at']].to_excel(writer, index=False, sheet_name='Summary')
+        excel_data = output.getvalue()
 
-            # Upload ขึ้น Supabase Storage (Bucket: reports)
-            file_name = f"summary_{trip_id}.xlsx"
-            supabase.storage.from_('reports').upload(path=file_name, file=excel_data, file_options={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
-            public_url = supabase.storage.from_('reports').get_public_url(file_name)
+        # Upload ขึ้น Supabase Storage (Bucket: reports)
+        file_name = f"summary_{trip_id}.xlsx"
+        supabase.storage.from_('reports').upload(path=file_name, file=excel_data, file_options={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+        public_url = supabase.storage.from_('reports').get_public_url(file_name)
 
-            summary_msg = f"📊 สรุป {trip_name}\n💰 ยอดรวม: {total:,.2f} บาท\n👥 หาร {num_people} คน\n📉 ตกคนละ: {avg:,.2f} บาท"
-            
-            supabase.table("trips").update({"status": "completed"}).eq("id", trip_id).execute()
+        summary_msg = f"📊 สรุป {trip_name}\n💰 ยอดรวม: {total:,.2f} บาท\n👥 หาร {num_people} คน\n📉 ตกคนละ: {avg:,.2f} บาท"
+        
+        supabase.table("trips").update({"status": "completed"}).eq("id", trip_id).execute()
 
-            line_bot_api.reply_message(event.reply_token, [
-                TextSendMessage(text=summary_msg),
-                TextSendMessage(text=f"📂 ดาวน์โหลดรายละเอียด Excel:\n{public_url}")
-            ])
+        line_bot_api.reply_message(event.reply_token, [
+            TextSendMessage(text=summary_msg),
+            TextSendMessage(text=f"📂 ดาวน์โหลดรายละเอียด Excel:\n{public_url}")
+        ])
         return
 
     # --- ส่วนเริ่มทริป / เมนู (คงเดิม) ---
@@ -184,6 +197,10 @@ def handle_text(event):
         return
 
     # --- ส่วนบันทึกเงิน (ปรับปรุงการกรองเลขหัวเราะและดึงชื่อคนส่ง) ---
+    # แก้ไขล่าสุด: ป้องกันการบันทึกเงินขณะอยู่ในสถานะรอจำนวนคน
+    if current_state == "waiting_final_split":
+        return  # ข้ามไปเลย ไม่ต้องประมวลผล
+
     money_match = re.search(r'\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b', text)
     if money_match:
         val_str = money_match.group(0).replace(',', '')
