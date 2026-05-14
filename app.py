@@ -11,7 +11,8 @@ from linebot.exceptions import InvalidSignatureError
 # คง Comment เดิม: เพิ่ม FlexSendMessage เพื่อรองรับหน้าเมนูแบบปุ่มกด
 from linebot.models import (
     MessageEvent, ImageMessage, TextMessage,
-    TextSendMessage, FlexSendMessage, FileSendMessage
+    TextSendMessage, FlexSendMessage
+    # แก้ไขล่าสุด: ลบ FileSendMessage ออก เพราะไม่มีใน LINE Bot SDK Python
 )
 from google.cloud import vision
 from google.oauth2 import service_account
@@ -86,10 +87,10 @@ def create_menu_flex():
             "layout": "vertical",
             "spacing": "md",
             "contents": [
-                {"type": "button", "style": "primary", "color": "#1DB446", "action": {"type": "message", "label": " เริ่มทริปใหม่", "text": "ทริป"}},
+                {"type": "button", "style": "primary", "color": "#1DB446", "action": {"type": "message", "label": "🚀 เริ่มทริปใหม่", "text": "ทริป"}},
                 {"type": "button", "style": "secondary", "action": {"type": "message", "label": "📊 สรุปยอดรวม", "text": "ยอดรวม"}},
                 {"type": "button", "style": "secondary", "action": {"type": "message", "label": "💰 หารค่าใช้จ่าย", "text": "หาร"}},
-                {"type": "button", "style": "link", "color": "#FF5555", "action": {"type": "message", "label": "🏁 ปิดทริป", "text": "ปิดทริป"}}
+                {"type": "button", "style": "link", "color": "#FF5555", "action": {"type": "message", "label": " ปิดทริป", "text": "ปิดทริป"}}
             ]
         }
     }
@@ -129,7 +130,7 @@ def handle_text(event):
         
         # แก้ไขล่าสุด: เข้าสู่สถานะรอจำนวนคนเพื่อสรุปยอด
         user_state[user_id] = {"action": "waiting_final_split", "trip_id": trip_info['id'], "trip_name": trip_info['trip_name']}
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip_info['trip_name']}\n👥 กรุณาระบุจำนวนคนที่จะหารยอดรวมครับ: "))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip_info['trip_name']}\n กรุณาระบุจำนวนคนที่จะหารยอดรวมครับ: "))
         return
 
     if current_state == "waiting_final_split":
@@ -160,7 +161,7 @@ def handle_text(event):
             supabase.storage.from_('reports').upload(path=file_name, file=excel_data, file_options={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
             public_url = supabase.storage.from_('reports').get_public_url(file_name)
 
-            summary_msg = f"📊 สรุป {trip_name}\n💰 ยอดรวม: {total:,.2f} บาท\n👥 หาร {num_people} คน\n ตกคนละ: {avg:,.2f} บาท"
+            summary_msg = f"📊 สรุป {trip_name}\n💰 ยอดรวม: {total:,.2f} บาท\n👥 หาร {num_people} คน\n📉 ตกคนละ: {avg:,.2f} บาท"
             
             supabase.table("trips").update({"status": "completed"}).eq("id", trip_id).execute()
 
