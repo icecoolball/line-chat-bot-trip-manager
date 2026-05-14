@@ -160,6 +160,7 @@ def handle_text(event):
             "📊 /summary — ดูยอดรวม\n"
             "💰 /split — หารค่าใช้จ่าย (ระบบจะถามจำนวนคน)\n"
             "💬 [จำนวน] [รายการ] — บันทึกค่าใช้จ่าย เช่น 50 ค่าข้าว\n"
+            "💬 [รายการ] [จำนวน] — หรือพิมพ์ เบียร์ 500 ก็ได้\n"
             "📷 ส่งรูปสลิป — บันทึกจากสลิปอัตโนมัติ"
         )
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_text))
@@ -210,27 +211,36 @@ def handle_text(event):
             user_state[user_id] = {"action": "waiting_split", "trip_id": trip_id}
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 จะหารกี่คน? (พิมพ์ตัวเลข เช่น 3)"))
 
-    # รองรับการบันทึกด้วยการพิมพ์ (เช่น "50 ค่าข้าว")
-    elif re.match(r'^\d+', text):
+    # แก้ไขล่าสุด: ปรับปรุงการดักจับข้อความบันทึกค่าใช้จ่ายให้ยืดหยุ่นขึ้น (รองรับตัวเลขทั้งหน้าและหลัง)
+    # ค้นหาตัวเลขในข้อความ (รองรับทศนิยมและคอมม่า)
+    elif re.search(r'\d+', text):
         trip_id = get_active_trip(event)
         if not trip_id:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ ไม่พบทริปที่กำลังใช้งาน กรุณาพิมพ์ /newtrip ก่อน"))
             return
-        parts = text.split(' ', 1)
-        amount = float(parts[0].replace(',', ''))
-        item_name = parts[1] if len(parts) > 1 else "ไม่ได้ระบุรายการ"
+        
+        # ดึงตัวเลขทั้งหมดออกมา (เช่น "เบียร์ 500" -> 500.0)
+        amounts = re.findall(r'[\d,]+\.?\d*', text)
+        if amounts:
+            amount_str = amounts[0].replace(',', '')
+            try:
+                amount = float(amount_str)
+                # แยกชื่อรายการโดยการตัดยอดเงินออกจากข้อความ
+                item_name = text.replace(amounts[0], '').strip() or "ไม่ได้ระบุรายการ"
+                
+                try:
+                    profile = line_bot_api.get_profile(user_id)
+                    display_name = profile.display_name
+                except:
+                    display_name = "User"
 
-        try:
-            profile = line_bot_api.get_profile(user_id)
-            display_name = profile.display_name
-        except:
-            display_name = "User"
-
-        supabase.table("expenses").insert({
-            "trip_id": trip_id, "line_user_id": user_id, "amount": amount,
-            "item_name": f"{item_name} (โดย {display_name})"
-        }).execute()
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f} บาท สำเร็จ!"))
+                supabase.table("expenses").insert({
+                    "trip_id": trip_id, "line_user_id": user_id, "amount": amount,
+                    "item_name": f"{item_name} (โดย {display_name})"
+                }).execute()
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f} บาท สำเร็จ!"))
+            except ValueError:
+                pass # กรณีไม่ใช่ตัวเลขที่ถูกต้องจริง ๆ ให้ปล่อยผ่านไป
 
 # --- 4. ส่วนประมวลผลรูปภาพสลิป (Image Handler) ---
 
