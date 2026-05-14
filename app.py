@@ -12,7 +12,6 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, ImageMessage, TextMessage,
     TextSendMessage, FlexSendMessage
-    # แก้ไขล่าสุด: ลบ FileSendMessage ออก เพราะไม่มีใน LINE Bot SDK Python
 )
 from google.cloud import vision
 from google.oauth2 import service_account
@@ -45,7 +44,6 @@ def get_active_trip(event):
     res = supabase.table("trips").select("id, trip_name").eq("line_user_id", source_id).eq("status", "active").execute()
     return res.data[0] if res.data else None
 
-# แก้ไขล่าสุด: ดึงชื่อจาก Profile กลุ่ม เพื่อให้รู้ว่าใครส่งแม้ไม่เป็นเพื่อนกับ Bot
 def get_display_name(user_id, group_id=None):
     try:
         if group_id:
@@ -55,8 +53,27 @@ def get_display_name(user_id, group_id=None):
         return profile.display_name
     except Exception as e:
         logger.error(f"Profile Error: {e}")
-        # แก้ไขล่าสุด: ถ้าดึงชื่อไม่ได้จริงๆ ให้ใช้ 4 หลักท้ายของ User ID เพื่อระบุตัวตน
         return f"สมาชิก({user_id[-4:]})"
+
+# แก้ไขล่าสุด: เพิ่มฟังก์ชันคำนวณยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน) ให้เหมือนรูปที่ 1
+def calculate_settlement(df, avg_per_person):
+    # รวมยอดที่แต่ละคนจ่ายไป
+    summary = df.groupby('line_user_id')['amount'].sum().reset_index()
+    results = []
+    for _, row in summary.iterrows():
+        # ดึงชื่อจาก item_name ที่เราบันทึกไว้ในรูปแบบ "... (โดย ชื่อ)"
+        sample_item = df[df['line_user_id'] == row['line_user_id']]['item_name'].iloc[0]
+        name_match = re.search(r'\(โดย (.*)\)', sample_item)
+        display_name = name_match.group(1) if name_match else "Unknown User"
+        
+        diff = row['amount'] - avg_per_person
+        if diff > 0:
+            results.append(f"• {display_name}: รับคืน {diff:,.2f}")
+        elif diff < 0:
+            results.append(f"• {display_name}: จ่ายเพิ่ม {abs(diff):,.2f}")
+        else:
+            results.append(f"• {display_name}: ยอดพอดี")
+    return "\n".join(results)
 
 def extract_amount(text):
     if not text:
@@ -72,7 +89,6 @@ def extract_amount(text):
     return None
 
 def create_menu_flex():
-    # แก้ไขล่าสุด: ลบช่องว่างเกินใน key/value ของ dictionary เพื่อป้องกัน JSON error
     return {
         "type": "bubble",
         "header": {
@@ -106,10 +122,6 @@ def callback():
         abort(400)
     return 'OK'
 
-@app.route("/health", methods=['GET'])
-def health():
-    return 'OK', 200
-
 # --- 3. ส่วนจัดการคำสั่งด้วยข้อความ ---
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
@@ -117,27 +129,16 @@ def handle_text(event):
     user_id = event.source.user_id
     group_id = getattr(event.source, 'group_id', None)
     source_id = group_id or user_id
-    current_state = user_state.get(user_id, {}).get("action")
+    
+    state_info = user_state.get(user_id, {})
+    current_state = state_info.get("action")
 
-    # แก้ไขล่าสุด: รายชื่อ Keyword การเงิน เพื่อใช้คัดกรองบทสนทนาทั่วไป
     FINANCE_KEYWORDS = ['จ่าย', 'ค่า', 'ราคา', 'บาท', 'baht', 'thb', 'โดนไป', 'จัดไป']
 
-    # --- ส่วนจัดการปิดทริปและส่งออก Excel ---
-    if text in ['/endtrip', 'ปิดทริป', 'ปิด']:
-        trip_info = get_active_trip(event)
-        if not trip_info:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ ไม่พบทริปที่เปิดอยู่"))
-            return
-        
-        # แก้ไขล่าสุด: เข้าสู่สถานะรอจำนวนคนเพื่อสรุปยอด
-        user_state[user_id] = {"action": "waiting_final_split", "trip_id": trip_info['id'], "trip_name": trip_info['trip_name']}
-        logger.info(f"User {user_id} entered waiting_final_split state for trip {trip_info['trip_name']}")
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip_info['trip_name']}\n👥 กรุณาระบุจำนวนคนที่จะหารยอดรวมครับ (เช่น 2, 3 คน, สองคน): "))
-        return
-
+    # แก้ไขล่าสุด: เช็คสถานะรอจำนวนคนเป็นอันดับแรก เพื่อป้องกันตัวเลขหลุดไปบันทึกเป็นค่าใช้จ่าย
     if current_state == "waiting_final_split":
-        # แก้ไขล่าสุด: ดึงตัวเลขจากข้อความ ไม่ว่าจะพิมพ์ "2", "2 คน", "สองคน", "2 people"
-        num_match = re.search(r'\d+', text)
+        # ดักจับตัวเลขล้วนๆ หรือตัวเลขที่มีคำว่า "คน" ต่อท้าย
+        num_match = re.search(r'^\d+', text)
         if not num_match:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ กรุณาระบุเป็นตัวเลขจำนวนคนครับ (เช่น 2, 3, 4)"))
             return
@@ -146,84 +147,73 @@ def handle_text(event):
         if num_people <= 0:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ จำนวนคนต้องมากกว่า 0 ครับ"))
             return
-        
-        trip_id = user_state[user_id]["trip_id"]
-        trip_name = user_state[user_id]["trip_name"]
-        user_state.pop(user_id, None)  # เคลียร์สถานะ
 
-        logger.info(f"User {user_id} finalized trip {trip_name} with {num_people} people")
+        trip_id = state_info["trip_id"]
+        trip_name = state_info["trip_name"]
+        user_state.pop(user_id, None) # เคลียร์สถานะทันที
 
-        # แก้ไขล่าสุด: ดึงข้อมูลมาสร้างสรุปและไฟล์ Excel
         res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
         if not res.data:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=" ไม่มีรายการค่าใช้จ่ายในทริปนี้"))
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ ไม่พบรายการค่าใช้จ่ายในทริปนี้"))
             return
         
         df = pd.DataFrame(res.data)
         total = df['amount'].sum()
         avg = total / num_people
 
-        # สร้าง Excel ใน Memory
+        # แก้ไขล่าสุด: คำนวณสรุปรายคนแบบ จ่ายเพิ่ม/รับคืน
+        settlement_text = calculate_settlement(df, avg)
+
+        # สร้าง Excel (คงเดิม)
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df[['item_name', 'amount', 'created_at']].to_excel(writer, index=False, sheet_name='Summary')
         excel_data = output.getvalue()
-
-        # Upload ขึ้น Supabase Storage (Bucket: reports)
         file_name = f"summary_{trip_id}.xlsx"
         supabase.storage.from_('reports').upload(path=file_name, file=excel_data, file_options={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
         public_url = supabase.storage.from_('reports').get_public_url(file_name)
 
-        summary_msg = f"📊 สรุป {trip_name}\n💰 ยอดรวม: {total:,.2f} บาท\n👥 หาร {num_people} คน\n📉 ตกคนละ: {avg:,.2f} บาท"
+        # แก้ไขล่าสุด: จัดรูปแบบข้อความให้ตรงตามรูปที่ 1
+        summary_msg = (
+            f"📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n\n"
+            f"💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
+            f"{settlement_text}"
+        )
         
         supabase.table("trips").update({"status": "completed"}).eq("id", trip_id).execute()
-
+        
         line_bot_api.reply_message(event.reply_token, [
             TextSendMessage(text=summary_msg),
-            TextSendMessage(text=f"📂 ดาวน์โหลดรายละเอียด Excel:\n{public_url}")
+            TextSendMessage(text=f"📂 ดาวน์โหลดรายละเอียดทริป {trip_name}:\n{public_url}")
         ])
         return
 
-    # --- ส่วนเริ่มทริป / เมนู (คงเดิม) ---
-    if text.startswith('เริ่มทริป') or text.startswith('ทริป'):
-        trip_name = text.replace('เริ่มทริป', '').replace('ทริป', '').strip()
-        if trip_name:
-            supabase.table("trips").update({"status": "completed"}).eq("line_user_id", source_id).eq("status", "active").execute()
-            supabase.table("trips").insert({"line_user_id": source_id, "trip_name": trip_name, "status": "active"}).execute()
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
-        else:
-            user_state[user_id] = {"action": "waiting_trip_name"}
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="✏️ กรุณาพิมพ์ชื่อทริปของคุณ: "))
+    # --- ส่วนปิดทริป ---
+    if text in ['/endtrip', 'ปิดทริป', 'ปิด']:
+        trip_info = get_active_trip(event)
+        if not trip_info:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ ไม่พบทริปที่เปิดอยู่"))
+            return
+        user_state[user_id] = {"action": "waiting_final_split", "trip_id": trip_info['id'], "trip_name": trip_info['trip_name']}
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip_info['trip_name']}\n👥 กรุณาระบุจำนวนคนที่จะหารยอดรวมครับ:"))
         return
 
-    # --- ส่วนบันทึกเงิน (ปรับปรุงการกรองเลขหัวเราะและดึงชื่อคนส่ง) ---
-    # แก้ไขล่าสุด: ป้องกันการบันทึกเงินขณะอยู่ในสถานะรอจำนวนคน
-    if current_state == "waiting_final_split":
-        return  # ข้ามไปเลย ไม่ต้องประมวลผล
-
+    # --- ส่วนบันทึกเงิน (Logic เดิมที่ปรับปรุงความแม่นยำ) ---
     money_match = re.search(r'\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b', text)
     if money_match:
         val_str = money_match.group(0).replace(',', '')
-        # แก้ไขล่าสุด: กรองเลขหัวเราะ 55, 555...
-        if re.match(r'^5{2,}$', val_str):
-            return
+        if re.match(r'^5{2,}$', val_str): return # กรอง 555
 
-        # แก้ไขล่าสุด: เช็คว่าเลขอยู่ขอบประโยค หรือมี Keyword การเงิน
         is_at_edge = text.startswith(money_match.group(0)) or text.endswith(money_match.group(0))
         has_finance_keyword = any(k in text for k in FINANCE_KEYWORDS)
 
         if is_at_edge or has_finance_keyword:
             trip_data = get_active_trip(event)
-            if not trip_data:
-                return
+            if not trip_data: return
             
             amount = float(val_str)
-            if amount <= 0:
-                return
-
-            detail = text.replace(money_match.group(0), '').strip() or "ค่าใช้จ่าย"
-            # แก้ไขล่าสุด: ส่ง group_id เข้าไปด้วยเพื่อดึงชื่อคนในกลุ่มได้ถูกต้อง
             sender_name = get_display_name(user_id, group_id)
+            detail = text.replace(money_match.group(0), '').strip() or "ค่าใช้จ่าย"
             
             supabase.table("expenses").insert({
                 "trip_id": trip_data['id'],
@@ -234,11 +224,19 @@ def handle_text(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ บันทึกยอด {amount:,.2f} จากคุณ {sender_name} สำเร็จ!"))
         return
 
-    # คำสั่งพื้นฐานอื่น ๆ (คงเดิม)
+    # ส่วนอื่นๆ (คงเดิม)
+    if text.startswith('เริ่มทริป') or text.startswith('ทริป'):
+        trip_name = text.replace('เริ่มทริป', '').replace('ทริป', '').strip()
+        if trip_name:
+            supabase.table("trips").update({"status": "completed"}).eq("line_user_id", source_id).eq("status", "active").execute()
+            supabase.table("trips").insert({"line_user_id": source_id, "trip_name": trip_name, "status": "active"}).execute()
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
+        return
+
     if text in ['เมนู', '/menu', 'menu']:
         line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Trip Menu", contents=create_menu_flex()))
 
-# --- 4. ส่วนประมวลผลรูปภาพ (ปรับปรุงการดึงชื่อคนส่ง) ---
+# --- 4. ส่วนประมวลผลรูปภาพ (คงเดิม) ---
 def process_image_async(reply_token, user_id, group_id, message_id, trip_id):
     try:
         message_content = line_bot_api.get_message_content(message_id)
@@ -249,11 +247,8 @@ def process_image_async(reply_token, user_id, group_id, message_id, trip_id):
             sender_name = get_display_name(user_id, group_id)
             file_path = f"trips/{trip_id}/{message_id}.jpg"
             supabase.storage.from_('slips').upload(path=file_path, file=image_bytes, file_options={"content-type": "image/jpeg"})
-            
             supabase.table("expenses").insert({
-                "trip_id": trip_id,
-                "line_user_id": user_id,
-                "amount": amount,
+                "trip_id": trip_id, "line_user_id": user_id, "amount": amount,
                 "slip_url": supabase.storage.from_('slips').get_public_url(file_path),
                 "item_name": f"สลิป (โดย {sender_name})"
             }).execute()
@@ -264,8 +259,7 @@ def process_image_async(reply_token, user_id, group_id, message_id, trip_id):
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     trip_data = get_active_trip(event)
-    if not trip_data:
-        return
+    if not trip_data: return
     group_id = getattr(event.source, 'group_id', None)
     threading.Thread(target=process_image_async, args=(event.reply_token, event.source.user_id, group_id, event.message.id, trip_data['id'])).start()
 
