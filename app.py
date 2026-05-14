@@ -2,11 +2,13 @@ import os
 import re
 import json
 import uuid
+import logging
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
 # แก้ไขล่าสุด: เพิ่ม FlexSendMessage เพื่อรองรับหน้าเมนูแบบปุ่มกด
 from linebot.models import (
-    MessageEvent, ImageMessage, TextMessage, 
+    MessageEvent, ImageMessage, TextMessage,
     TextSendMessage, FlexSendMessage
 )
 from google.cloud import vision
@@ -14,6 +16,10 @@ from google.oauth2 import service_account
 from supabase import create_client, Client
 
 app = Flask(__name__)
+
+# แก้ไขล่าสุด: เพิ่ม logging เพื่อให้ debug ได้ง่ายขึ้น ดูใน Railway/Render logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- 1. การตั้งค่าเริ่มต้น ---
 # คง Comment เดิม: โหลด Config และตั้งค่าความปลอดภัย
@@ -30,9 +36,10 @@ supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_
 
 # --- 2. ฟังก์ชันช่วย (Helper Functions) ---
 
-# แก้ไขล่าสุด: ปรับปรุงการหา Active Trip โดยรองรับทั้ง Group ID และ User ID
+# แก้ไขล่าสุด: ใช้ getattr ป้องกัน AttributeError กรณี source ไม่มี group_id
+# (เดิม: event.source.group_id จะ crash เงียบๆ ถ้า source type ไม่ใช่ group)
 def get_active_trip(event):
-    source_id = event.source.group_id if event.source.type == 'group' else event.source.user_id
+    source_id = getattr(event.source, 'group_id', None) or event.source.user_id
     res = supabase.table("trips").select("id").eq("line_user_id", source_id).eq("status", "active").execute()
     return res.data[0]['id'] if res.data else None
 
@@ -67,14 +74,21 @@ def create_menu_flex():
         }
     }
 
+# แก้ไขล่าสุด: แยก InvalidSignatureError ออกจาก Exception ทั่วไป
+# (เดิม: except Exception ครอบทุกอย่าง ทำให้ไม่รู้ว่า error คืออะไร และ debug ไม่ได้)
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
+    logger.info(f"[Webhook] Received body length: {len(body)}")
     try:
         handler.handle(body, signature)
-    except Exception:
+    except InvalidSignatureError:
+        logger.error("[Webhook] Invalid signature — ตรวจสอบ LINE_CHANNEL_SECRET ใน Environment Variables")
         abort(400)
+    except Exception as e:
+        logger.error(f"[Webhook] Unexpected error: {e}")
+        abort(500)
     return 'OK'
 
 # --- 3. ส่วนจัดการคำสั่งด้วยข้อความ (Comprehensive Text Handler) ---
@@ -82,7 +96,11 @@ def callback():
 def handle_text(event):
     text = event.message.text.strip()
     user_id = event.source.user_id
-    source_id = event.source.group_id if event.source.type == 'group' else user_id
+    # แก้ไขล่าสุด: ใช้ getattr ป้องกัน AttributeError เช่นเดียวกับ get_active_trip
+    source_id = getattr(event.source, 'group_id', None) or user_id
+
+    # แก้ไขล่าสุด: เพิ่ม log ทุกครั้งที่รับคำสั่ง เพื่อ debug ใน Railway/Render logs
+    logger.info(f"[Text] source_id={source_id}, user_id={user_id}, text='{text}'")
 
     # แก้ไขล่าสุด: ดักจับคำสั่ง "เมนู" เพื่อแสดง Flex Message
     if text in ['เมนู', '/menu', 'menu']:
@@ -90,11 +108,26 @@ def handle_text(event):
         line_bot_api.reply_message(event.reply_token, FlexSendMessage(alt_text="Trip Menu", contents=flex_menu))
         return
 
+    # แก้ไขล่าสุด: เพิ่มคำสั่ง /help แสดงคำสั่งทั้งหมดเป็น text สำรอง
+    if text in ['/help', 'help', 'ช่วยเหลือ']:
+        help_text = (
+            "📋 คำสั่งที่ใช้ได้:\n"
+            "🚀 /newtrip [ชื่อ] — เริ่มทริปใหม่\n"
+            "🏁 /endtrip — ปิดทริป\n"
+            "📊 /summary — ดูยอดรวม\n"
+            "💰 /split [จำนวนคน] — หารค่าใช้จ่าย\n"
+            "💬 [จำนวน] [รายการ] — บันทึกค่าใช้จ่าย เช่น 50 ค่าข้าว\n"
+            "📷 ส่งรูปสลิป — บันทึกจากสลิปอัตโนมัติ"
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_text))
+        return
+
     # คำสั่งสร้างทริปใหม่
     if text.startswith('/newtrip'):
         trip_name = text.replace('/newtrip', '').strip() or "ทริปใหม่"
         supabase.table("trips").update({"status": "completed"}).eq("line_user_id", source_id).eq("status", "active").execute()
         supabase.table("trips").insert({"line_user_id": source_id, "trip_name": trip_name, "status": "active"}).execute()
+        logger.info(f"[newtrip] Created trip '{trip_name}' for source_id={source_id}")
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
 
     # คำสั่งปิดทริปปัจจุบัน
@@ -115,7 +148,9 @@ def handle_text(event):
     # เพิ่มเติม: คำสั่งหารเงิน /split
     elif text.startswith('/split'):
         trip_id = get_active_trip(event)
-        if not trip_id: return
+        if not trip_id:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ ไม่พบทริปที่กำลังใช้งาน"))
+            return
         try:
             num_people = int(text.replace('/split', '').strip())
             res = supabase.table("expenses").select("amount").eq("trip_id", trip_id).execute()
@@ -130,11 +165,13 @@ def handle_text(event):
     # รองรับการบันทึกด้วยการพิมพ์ (เช่น "50 ค่าข้าว")
     elif re.match(r'^\d+', text):
         trip_id = get_active_trip(event)
-        if not trip_id: return
+        if not trip_id:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ ไม่พบทริปที่กำลังใช้งาน กรุณาพิมพ์ /newtrip ก่อน"))
+            return
         parts = text.split(' ', 1)
         amount = float(parts[0].replace(',', ''))
         item_name = parts[1] if len(parts) > 1 else "ไม่ได้ระบุรายการ"
-        
+
         try:
             profile = line_bot_api.get_profile(user_id)
             display_name = profile.display_name
@@ -142,7 +179,7 @@ def handle_text(event):
             display_name = "User"
 
         supabase.table("expenses").insert({
-            "trip_id": trip_id, "line_user_id": user_id, "amount": amount, 
+            "trip_id": trip_id, "line_user_id": user_id, "amount": amount,
             "item_name": f"{item_name} (โดย {display_name})"
         }).execute()
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f} บาท สำเร็จ!"))
@@ -152,7 +189,7 @@ def handle_text(event):
 def handle_image(event):
     user_id = event.source.user_id
     trip_id = get_active_trip(event)
-    
+
     if not trip_id:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ โปรดเริ่มทริปก่อนส่งสลิป"))
         return
@@ -163,7 +200,7 @@ def handle_image(event):
     image = vision.Image(content=image_bytes)
     response = vision_client.text_detection(image=image)
     texts = response.text_annotations
-    
+
     if not texts:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="อ่านรูปไม่ได้ครับ"))
         return
@@ -176,7 +213,10 @@ def handle_image(event):
             # C. อัปโหลดไป Storage (แยกโฟลเดอร์ตามทริป)
             file_path = f"trips/{trip_id}/{event.message.id}.jpg"
             supabase.storage.from_('slips').upload(path=file_path, file=image_bytes, file_options={"content-type": "image/jpeg"})
-            slip_url = supabase.storage.from_('slips').get_public_url(file_path).public_url
+
+            # แก้ไขล่าสุด: supabase-py เวอร์ชันใหม่ get_public_url() คืนค่าเป็น str ตรงๆ
+            # (เดิม: .get_public_url(...).public_url จะ crash เพราะ return เป็น str ไม่ใช่ object)
+            slip_url = supabase.storage.from_('slips').get_public_url(file_path)
 
             try:
                 profile = line_bot_api.get_profile(user_id)
@@ -193,7 +233,7 @@ def handle_image(event):
             supabase.table("expenses").insert(data).execute()
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"✅ บันทึกสลิป {amount:,.2f} บาท สำเร็จ!"))
         except Exception as e:
-            print(f"Error: {e}") 
+            logger.error(f"[Image] Error saving slip: {e}")
     else:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❓ ไม่พบยอดเงินในสลิป"))
 
