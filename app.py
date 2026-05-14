@@ -173,7 +173,7 @@ def handle_text(event):
         total = sum(item['amount'] for item in res.data)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📊 ยอดรวมทริป: {total:,.2f} บาท"))
 
-    elif text.startswith('/split'):
+    elif text.startswith('/split') or text in ['หาร']:
         trip_id = get_active_trip(event)
         num_str = text.replace('/split', '').strip()
         if num_str.isdigit():
