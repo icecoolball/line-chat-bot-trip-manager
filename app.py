@@ -102,6 +102,9 @@ def handle_text(event):
     source_id = getattr(event.source, 'group_id', None) or user_id
     current_state = user_state.get(user_id, {}).get("action")
 
+    # แก้ไขล่าสุด: รายชื่อ Keyword บ่งบอกเรื่องเงิน เพื่อใช้คัดกรองประโยคสนทนาทั่วไป
+    FINANCE_KEYWORDS = ['จ่าย', 'ค่า', 'ราคา', 'บาท', 'baht', 'thb', 'โดนไป', 'จัดไป']
+
     # --- รอรับชื่อทริป (กรณีถามหาชื่อ) ---
     if current_state == "waiting_trip_name":
         trip_name = text or "ทริปใหม่"
@@ -147,7 +150,7 @@ def handle_text(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🏁 ปิดทริปเรียบร้อย!"))
         return
 
-    # สรุปยอดรวม (Summary)
+    # แก้ไขล่าสุด: ตรวจเช็คคำสั่งสรุปยอดและหารก่อน เพื่อไม่ให้ทับซ้อนกับ Logic บันทึกเงิน
     elif text in ['/summary', 'ยอดรวม', 'ยอด', 'รวม']:
         trip_id = get_active_trip(event)
         if not trip_id:
@@ -163,7 +166,6 @@ def handle_text(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"📊 ยอดรวมทริป: {total:,.2f} บาท\n\n💰 จ่ายแล้วโดย:\n{summary_list}"))
         return
 
-    # แก้ไขล่าสุด: หารเงินรองรับคำว่า 'หาร' และ Net Settlement
     elif text.startswith('/split') or text.startswith('หาร') or (current_state == "waiting_split"):
         trip_id = get_active_trip(event)
         if not trip_id: return
@@ -189,14 +191,28 @@ def handle_text(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=result_text))
         return
 
-    # บันทึกค่าใช้จ่าย (รองรับ Emoji/สลับที่)
-    elif re.search(r'\d+', text):
-        trip_id = get_active_trip(event)
-        if not trip_id: return
-        amounts = re.findall(r'[\d,]+\.?\d*', text)
-        if amounts:
-            amount = float(amounts[0].replace(',', ''))
-            detail = text.replace(amounts[0], '').strip() or "ค่าใช้จ่าย"
+    # แก้ไขล่าสุด: Logic บันทึกค่าใช้จ่ายแบบมืออาชีพ (คัดกรอง 555 และบทสนทนาทั่วไป)
+    money_match = re.search(r'\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b', text)
+    if money_match:
+        val_str = money_match.group(0).replace(',', '')
+        
+        # 1. กรองเลขหัวเราะ (55, 555, 5555...)
+        if re.match(r'^5{2,}$', val_str):
+            return
+
+        # 2. ตรวจสอบเงื่อนไขตำแหน่งตัวเลข หรือมี Keyword การเงิน
+        is_at_edge = text.startswith(money_match.group(0)) or text.endswith(money_match.group(0))
+        has_finance_keyword = any(k in text for k in FINANCE_KEYWORDS)
+
+        # บันทึกเฉพาะเมื่อเข้าเงื่อนไขใดเงื่อนไขหนึ่ง
+        if is_at_edge or has_finance_keyword:
+            trip_id = get_active_trip(event)
+            if not trip_id: return
+            
+            amount = float(val_str)
+            if amount <= 0: return
+
+            detail = text.replace(money_match.group(0), '').strip() or "ค่าใช้จ่าย"
             sender_name = get_display_name(user_id)
             supabase.table("expenses").insert({
                 "trip_id": trip_id, "line_user_id": user_id, "amount": amount,
