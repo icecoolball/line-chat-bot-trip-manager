@@ -10,7 +10,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, ImageMessage, TextMessage,
-    TextSendMessage, FlexSendMessage, QuickReply, QuickReplyButton, MessageAction
+    TextSendMessage, QuickReply, QuickReplyButton, MessageAction
 )
 from google.cloud import vision
 from google.oauth2 import service_account
@@ -192,39 +192,88 @@ def update_expense_amount(expense_id, new_amount):
         logger.error(f"Update expense error: {e}")
         return False
 
+def send_menu(reply_token):
+    """ส่งเมนูคำสั่งทั้งหมดแบบ Quick Reply"""
+    quick_reply = QuickReply(items=[
+        QuickReplyButton(action=MessageAction(label="📋 ID", text="id")),
+        QuickReplyButton(action=MessageAction(label="🚀 สร้างทริป", text="ทริป ")),
+        QuickReplyButton(action=MessageAction(label="💰 ยอดรวม", text="ยอด")),
+        QuickReplyButton(action=MessageAction(label="🏁 จบทริป", text="จบทริป")),
+        QuickReplyButton(action=MessageAction(label="✏️ แก้ไขยอด", text="edit")),
+        QuickReplyButton(action=MessageAction(label="📅 Event", text="event")),
+        QuickReplyButton(action=MessageAction(label="🛑 Stop Event", text="stop event")),
+        QuickReplyButton(action=MessageAction(label="❓ เมนู", text="เมนู")),
+    ])
+    
+    msg = "📋 **รายการคำสั่งทั้งหมด**\n\n"
+    msg += "🔑 **id** - แสดง User ID และ Group ID\n"
+    msg += "🚀 **ทริป [ชื่อ]** - สร้างทริปใหม่\n"
+    msg += "💰 **ยอด** - แสดงยอดรวมค่าใช้จ่าย\n"
+    msg += "🏁 **จบทริป** - ปิดทริปและคำนวณหาร\n"
+    msg += "✏️ **edit** - แก้ไขยอดเงิน (เลือกทีละรายการ)\n"
+    msg += "📅 **event** - แสดง Event ที่ตั้งค่าไว้\n"
+    msg += "🛑 **stop event** - หยุดการแจ้งเตือน Event\n"
+    msg += "📸 **ส่งรูปสลิป/บิล** - OCR อ่านยอดอัตโนมัติ\n"
+    msg += "✏️ **พิมพ์ข้อความ** เช่น 'บอล ค่าเบียร์ 2000' - บันทึกค่าใช้จ่าย\n\n"
+    msg += "💡 **คำแนะนำ**: ถ้ายอดไม่ถูกต้อง พิมพ์ 'edit' แล้วเลือกแก้ไขภายหลัง"
+    
+    line_bot_api.reply_message(
+        reply_token,
+        TextSendMessage(text=msg, quick_reply=quick_reply)
+    )
+
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชันดึงจำนวนเงิน
-#    🔧 คงยอดขั้นต่ำไว้ที่ 10 บาท (ตามที่ user ต้องการ)
-#    🔧 เลือกค่าสูงสุดที่เหมาะสม
+#    🔧 รองรับสกุลเงิน บาท, ฿, $ (ไม่รวม ₮)
+#    🔧 คงยอดขั้นต่ำไว้ที่ 10 บาท
 # =================================================================
 def extract_amount(text):
-    """ดึงจำนวนเงินจากข้อความสลิป/บิล - เลือกค่ามากสุดที่เหมาะสม (ขั้นต่ำ 10 บาท)"""
+    """ดึงจำนวนเงินจากข้อความสลิป/บิล - รองรับสกุลเงิน บาท, ฿, $"""
     if not text:
         return None
     
-    # เช็คคำสำคัญว่ามีคำที่เกี่ยวข้องกับบิลหรือไม่
-    bill_keywords = ['บาท', 'total', 'รวม', 'ยอดรวม', 'ราคารวม', 'ทั้งหมด', 'จำนวนเงิน']
+    # เช็คคำสำคัญ
+    bill_keywords = ['บาท', 'total', 'รวม', 'ยอดรวม', 'ราคารวม', 'ทั้งหมด', 'จำนวนเงิน', 'หุ้นมด']
     has_bill_keyword = any(keyword in text.lower() for keyword in bill_keywords)
     
     if not has_bill_keyword:
         logger.info("No bill keyword found, skipping")
         return None
     
-    # ดึงตัวเลขทั้งหมดในเอกสาร
-    all_amounts = re.findall(r'\b(\d+(?:,\d{3})*(?:\.\d{2})?)\b', text)
-    valid_amounts = []
+    # แยกเป็นบรรทัด
+    lines = text.split('\n')
     
-    for a in all_amounts:
-        try:
-            num = float(a.replace(',', ''))
-            # กรองเลขที่ไม่น่าใช่:
-            # - น้อยกว่า 10 บาท (คงตามที่ user ต้องการ)
-            # - มากกว่า 10,000,000 บาท
-            # - ความยาวเลขเกิน 8 หลัก (เลขบิล/เลขที่เอกสาร)
-            if 10 <= num <= 10000000 and len(str(int(num))) <= 8:
-                valid_amounts.append(num)
-        except:
-            continue
+    # 1. หาบรรทัดที่มีคำว่า "หุ้นมด", "รวม", "total"
+    for i, line in enumerate(lines):
+        if 'หุ้นมด' in line or 'รวม' in line or 'total' in line.lower():
+            # รองรับสกุลเงิน บาท, ฿, $
+            amounts = re.findall(r'[฿$]?(\d+(?:,\d{3})*(?:\.\d{2})?)', line)
+            if amounts:
+                try:
+                    num = float(amounts[0].replace(',', ''))
+                    if 10 <= num <= 10000000:
+                        logger.info(f"Found amount from keyword line: {num}")
+                        return num
+                except:
+                    pass
+    
+    # 2. ดึงตัวเลขทั้งหมดที่อยู่ติดกับสกุลเงิน
+    currency_patterns = [
+        r'[฿$](\d+(?:,\d{3})*(?:\.\d{2})?)',   # ฿424, $424
+        r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*บาท',  # 424 บาท
+        r'(\d+(?:,\d{3})*(?:\.\d{2})?)',         # ตัวเลขทั่วไป
+    ]
+    
+    valid_amounts = []
+    for pattern in currency_patterns:
+        matches = re.findall(pattern, text)
+        for a in matches:
+            try:
+                num = float(a.replace(',', ''))
+                if 10 <= num <= 10000000 and len(str(int(num))) <= 8:
+                    valid_amounts.append(num)
+            except:
+                continue
     
     if valid_amounts:
         # เลือกค่าที่มากที่สุด (น่าจะเป็นยอดรวม)
@@ -295,7 +344,14 @@ def handle_text(event):
     reply_token = event.reply_token
 
     # =============================================================
-    # 0. จัดการแก้ไขยอด (edit)
+    # 0. เมนูหลัก
+    # =============================================================
+    if text in ["เมนู", "menu"]:
+        send_menu(reply_token)
+        return
+
+    # =============================================================
+    # 1. จัดการแก้ไขยอด (edit)
     # =============================================================
     if text.startswith("edit"):
         trip = get_active_trip(user_id)
@@ -310,12 +366,11 @@ def handle_text(event):
         
         # สร้างข้อความแสดงรายการให้เลือก
         msg = "✏️ เลือกรายการที่ต้องการแก้ไขยอดเงิน:\n"
-        for i, exp in enumerate(expenses[-10:], 1):  # แสดง 10 รายการล่าสุด
+        for i, exp in enumerate(expenses[-10:], 1):
             name = get_display_name(exp['line_user_id'], group_id)
             msg += f"{i}. {exp['item_name']} - {exp['amount']:,.2f} บาท (โดย {name})\n"
         msg += "\n👉 พิมพ์ 'edit 1' เพื่อแก้ไขรายการที่ 1 หรือพิมพ์ 'edit 1 500' เพื่อเปลี่ยนเป็น 500 บาทเลย"
         
-        # เก็บรายการไว้ใน state
         user_state[user_id] = {"action": "edit_selection", "expenses": expenses}
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
@@ -326,7 +381,6 @@ def handle_text(event):
         parts = text.split()
         
         try:
-            # รูปแบบ: edit 1 (เลือกก่อน แล้วค่อยใส่ยอดทีหลัง)
             if len(parts) == 1:
                 idx = int(parts[0]) - 1
                 if 0 <= idx < len(expenses):
@@ -344,7 +398,6 @@ def handle_text(event):
                     line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง"))
                     del user_state[user_id]
             
-            # รูปแบบ: edit 1 500 (เลือกและใส่ยอดเลย)
             elif len(parts) >= 2:
                 idx = int(parts[0]) - 1
                 new_amount = float(parts[1].replace(',', ''))
@@ -387,7 +440,7 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 1. พิมพ์ id - แสดง User ID และ Group ID
+    # 2. พิมพ์ id - แสดง User ID และ Group ID
     # =============================================================
     if text == "id":
         msg = f"🔑 [LINE ID Info]\n\n👤 User ID (ของคุณ):\n{user_id}"
@@ -397,7 +450,7 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 2. พิมพ์ ทริป หรือ trip + ชื่อ - สร้างทริปใหม่
+    # 3. พิมพ์ ทริป หรือ trip + ชื่อ - สร้างทริปใหม่
     # =============================================================
     if text.startswith("ทริป ") or text.startswith("trip "):
         if text.startswith("ทริป "):
@@ -410,9 +463,7 @@ def handle_text(event):
             return
         
         try:
-            # ปิดทริปเก่า
             supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
-            # สร้างทริปใหม่
             supabase.table("trips").insert({
                 "title": trip_name,
                 "status": "active",
@@ -426,7 +477,7 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 3. พิมพ์ ยอด หรือ sum - แสดงยอดรวมล่าสุด
+    # 4. พิมพ์ ยอด หรือ sum - แสดงยอดรวมล่าสุด
     # =============================================================
     if text in ["ยอด", "sum"]:
         trip = get_active_trip(user_id)
@@ -447,7 +498,7 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 4. พิมพ์ จบทริป หรือ end trip - ปิดทริปและคำนวณหาร
+    # 5. พิมพ์ จบทริป หรือ end trip - ปิดทริปและคำนวณหาร
     # =============================================================
     if text in ["จบทริป", "end trip"]:
         trip = get_active_trip(user_id)
@@ -460,7 +511,7 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 4.1 รับจำนวนคนหลังจากจบทริป
+    # 5.1 รับจำนวนคนหลังจากจบทริป
     # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "end_trip":
         try:
@@ -499,9 +550,9 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 7-8. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
+    # 6. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
     # =============================================================
-    if not text.startswith(("ทริป", "trip", "ยอด", "sum", "จบทริป", "end", "id", "event", "stop", "edit")):
+    if not text.startswith(("ทริป", "trip", "ยอด", "sum", "จบทริป", "end", "id", "event", "stop", "edit", "เมนู", "menu")):
         trip = get_active_trip(user_id)
         if trip:
             name, item, amount = parse_expense_text(event.message.text.strip())
@@ -521,7 +572,7 @@ def handle_text(event):
                 return
 
     # =============================================================
-    # 9. พิมพ์ event - แสดง event ปัจจุบัน
+    # 7. พิมพ์ event - แสดง event ปัจจุบัน
     # =============================================================
     if text == "event":
         events = get_active_events()
@@ -539,7 +590,7 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 10. พิมพ์ stop event - แสดงรายการให้เลือกหยุด
+    # 8. พิมพ์ stop event - แสดงรายการให้เลือกหยุด
     # =============================================================
     if text == "stop event":
         events = get_active_events()
@@ -557,7 +608,7 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 10.1 รับเลข event ที่เลือกหยุด
+    # 8.1 รับเลข event ที่เลือกหยุด
     # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "stop_event":
         try:
@@ -580,7 +631,7 @@ def handle_text(event):
         return
 
 # =============================================================
-# 5-6. รองรับรูปภาพสลิป/บิล
+# 9. รองรับรูปภาพสลิป/บิล
 # =============================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token):
     try:
@@ -591,7 +642,6 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
         
         logger.info(f"OCR Text detected (first 500 chars): {text_detected[:500] if text_detected else 'None'}")
         
-        # ใช้ extract_amount ดึงจำนวนเงิน (เลือกค่ามากสุดที่เหมาะสม ขั้นต่ำ 10 บาท)
         amount = extract_amount(text_detected)
         
         if amount:
@@ -604,18 +654,19 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
                 "item_name": f"สลิป/บิล (โดย {sender_name})"
             }).execute()
             
-            # ดึง id ของรายการที่เพิ่งเพิ่ม
-            new_expense_id = result.data[0]['id'] if result.data else None
-            
             success_msg = f"✅ บันทึกจำนวนเงิน {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"
             
             # แนะนำคำสั่งแก้ไข
-            if new_expense_id:
-                success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit {len(get_all_expenses(trip_id))} {amount}"
+            expenses = get_all_expenses(trip_id)
+            success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit {len(expenses)} {amount}"
             
             line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
         else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในรูป หรือไม่ใช่สลิปการเงิน กรุณาบันทึกด้วยข้อความ หรือพิมพ์ 'edit' เพื่อแก้ไขภายหลัง"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(
+                text="⚠️ ไม่พบจำนวนเงินในรูป หรือไม่ใช่สลิปการเงิน\n\n"
+                     "📌 ลองบันทึกด้วยข้อความ เช่น 'บอล ค่าเหล้า 500'\n"
+                     "✏️ หรือพิมพ์ 'edit' เพื่อแก้ไขภายหลัง"
+            ))
     except Exception as e:
         logger.error(f"Process slip error: {e}")
         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้ กรุณาลองใหม่"))
