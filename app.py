@@ -3,16 +3,12 @@ import re
 import json
 import logging
 import threading
-import pandas as pd
-import io
-from flask import Flask, request, abort, render_template, send_from_directory, jsonify
+import requests
+from datetime import datetime, timedelta
+from flask import Flask, request, abort, render_template, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-# คง Comment เดิม: เพิ่ม FlexSendMessage เพื่อรองรับหน้าเมนูแบบปุ่มกด
-from linebot.models import (
-    MessageEvent, ImageMessage, TextMessage,
-    TextSendMessage, FlexSendMessage
-)
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from google.cloud import vision
 from google.oauth2 import service_account
 from supabase import create_client, Client
@@ -32,18 +28,154 @@ creds_dict = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
 creds = service_account.Credentials.from_service_account_info(creds_dict)
 vision_client = vision.ImageAnnotatorClient(credentials=creds)
 
-# =================================================================
-# [แก้ไขล่าสุด]: ล้างสัญลักษณ์ข้อผิดพลาดของระบบแปลภาษาออกเพื่อให้รันผ่านฉลุยบน Render
-# =================================================================
 supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_ANON_KEY"))
 
-# แก้ไขล่าสุด: เพิ่ม user_state เพื่อคุมลำดับการกรอกข้อมูล
 user_state = {}
-
-# แก้ไขล่าสุด: กำหนดพาธไฟล์ของตารางตั้งจองตั๋วภายในเครื่องคอมพิวเตอร์
 SCHEDULES_FILE = "schedules.local.json"
 
-# --- 2. ฟังก์ชันช่วย (Helper Functions) ของบอตทริปเดิม [คงเดิมทุกประการ] ---
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: ฟังก์ชันโหลดและบันทึก schedules
+# =================================================================
+def load_schedules():
+    if os.path.exists(SCHEDULES_FILE):
+        with open(SCHEDULES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def save_schedules(schedules):
+    with open(SCHEDULES_FILE, "w", encoding="utf-8") as f:
+        json.dump(schedules, f, ensure_ascii=False, indent=2)
+
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: API ดึงเวลาเปิดขายจาก URL
+# =================================================================
+@app.route("/api/event-time", methods=["GET"])
+def get_event_time():
+    url = request.args.get("url", "")
+    if not url:
+        return jsonify({"ok": False, "error": "ไม่มี URL"}), 400
+    
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        
+        # ดึงข้อความจากหน้าเว็บ
+        html_text = resp.text
+        
+        # พยายามหาเวลาจาก meta tags หรือข้อความ
+        time_patterns = [
+            r'(\d{1,2})\s+(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+(\d{3,4})',
+            r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})',
+            r'(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})',
+        ]
+        
+        matched_text = ""
+        for pattern in time_patterns:
+            match = re.search(pattern, html_text, re.IGNORECASE)
+            if match:
+                matched_text = match.group(0)
+                break
+        
+        return jsonify({
+            "ok": True,
+            "isoLocal": "",
+            "matchedText": matched_text
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: API ส่ง LINE message
+# =================================================================
+@app.route("/api/line-push", methods=["POST"])
+def line_push():
+    data = request.json
+    target_id = data.get("targetId")
+    message = data.get("message")
+    
+    if not target_id or not message:
+        return jsonify({"ok": False, "error": "ต้องระบุ targetId และ message"}), 400
+    
+    try:
+        line_bot_api.push_message(target_id, TextSendMessage(text=message))
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.error(f"LINE push error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: API เช็คสถานะ Config
+# =================================================================
+@app.route("/api/config-status", methods=["GET"])
+def config_status():
+    return jsonify({
+        "ok": True,
+        "lineTokenConfigured": bool(os.getenv('LINE_CHANNEL_ACCESS_TOKEN')),
+        "lineSecretConfigured": bool(os.getenv('LINE_CHANNEL_SECRET')),
+        "lineUserConfigured": False  # ต้องให้ user ใส่เอง
+    })
+
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: API จัดการ schedules (GET, POST, DELETE)
+# =================================================================
+@app.route("/api/schedules", methods=["GET", "POST"])
+def handle_schedules():
+    if request.method == "GET":
+        schedules = load_schedules()
+        return jsonify({"ok": True, "schedules": schedules})
+    
+    elif request.method == "POST":
+        try:
+            data = request.json
+            schedules = load_schedules()
+            
+            # สร้าง ID ใหม่
+            new_id = str(len(schedules) + 1)
+            new_schedule = {
+                "id": new_id,
+                "targetId": data.get("targetId", ""),
+                "buyerName": data.get("buyerName", ""),
+                "seatCount": data.get("seatCount", ""),
+                "zone": data.get("zone", ""),
+                "name": data.get("name", ""),
+                "url": data.get("url", ""),
+                "totalPrice": data.get("totalPrice", ""),
+                "saleTime": data.get("saleTime", ""),
+                "site": data.get("site", ""),
+                "reminders": [],
+                "createdAt": datetime.now().isoformat()
+            }
+            
+            schedules.append(new_schedule)
+            save_schedules(schedules)
+            return jsonify({"ok": True, "schedule": new_schedule})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/schedules/<schedule_id>", methods=["DELETE"])
+def delete_schedule(schedule_id):
+    try:
+        schedules = load_schedules()
+        schedules = [s for s in schedules if s.get("id") != schedule_id]
+        save_schedules(schedules)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: API เวลาเซิร์ฟเวอร์
+# =================================================================
+@app.route("/api/server-time", methods=["GET"])
+def get_server_time():
+    import time
+    return jsonify({"ok": True, "serverTime": int(time.time() * 1000)})
+
+# =================================================================
+# [คงเดิม]: ฟังก์ชันบอตจัดการทริป
+# =================================================================
 def get_active_trip(event):
     group_id = getattr(event.source, 'group_id', None)
     user_id = event.source.user_id
@@ -73,46 +205,21 @@ def extract_amount(text):
     amounts = [float(x) for x in re.findall(r'\b\d+\.\d{2}\b', clean_text)]
     return max(amounts) if amounts else None
 
-
 # =================================================================
-# [อัปเดตล่าสุด 2026-05-20]: เพิ่ม Endpoint ให้บริการหน้าบ้าน Ticket Dashboard
+# [คงเดิม]: เส้นทางหลัก
 # =================================================================
-
 @app.route("/")
 def render_dashboard():
-    # แก้ไขล่าสุด: ส่งหน้าเว็บควบคุมหลักออกไปแสดงผลที่พอร์ตหลักของ Flask
     return render_template("index.html")
 
 @app.route("/static/<path:filename>")
 def serve_static(filename):
-    # แก้ไขล่าสุด: ส่งไฟล์ตัวเสริมระบบเช่น CSS และ JS จากโฟลเดอร์ static
+    from flask import send_from_directory
     return send_from_directory("static", filename)
 
-@app.route("/api/server-time", methods=["GET"])
-def get_server_time():
-    # แก้ไขล่าสุด: ดึงข้อมูลเวลาปัจจุบันของเครื่องเซิร์ฟเวอร์แบบมิลลิวินาทีสำหรับตัวนับถอยหลังหน้าบ้าน
-    import time
-    return jsonify({"ok": True, "serverTime": int(time.time() * 1000)})
-
-@app.route("/api/schedules", methods=["GET", "POST"])
-def handle_schedules():
-    # แก้ไขล่าสุด: ระบบดึงและจัดเก็บค่าประวัติตารางนับถอยหลังจองตั๋วลงเครื่อง (Local JSON)
-    if request.method == "POST":
-        try:
-            data = request.json
-            with open(SCHEDULES_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return jsonify({"ok": True})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
-    else:
-        if os.path.exists(SCHEDULES_FILE):
-            with open(SCHEDULES_FILE, "r", encoding="utf-8") as f:
-                return jsonify(json.load(f))
-        return jsonify([])
-
-
-# --- 3. LINE Webhook และฟังก์ชันบอตจัดการทริปเดิม [คงเดิมทุกประการ] ---
+# =================================================================
+# [คงเดิม]: LINE Webhook
+# =================================================================
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
@@ -151,6 +258,7 @@ def handle_text(event):
 
     if text == "สรุปค่าใช้จ่าย":
         try:
+            import pandas as pd
             res = supabase.table("expenses").select("*").eq("trip_id", trip_data["id"]).execute()
             df = pd.DataFrame(res.data)
             if df.empty:
@@ -191,6 +299,7 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
+    from linebot.models import ImageMessage
     trip_data = get_active_trip(event)
     if not trip_data: return
     threading.Thread(target=process_slip, args=(event.message.id, trip_data["id"], event.source.user_id, getattr(event.source, 'group_id', None), event.reply_token)).start()

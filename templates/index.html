@@ -1,121 +1,966 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="th">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ticket Prep Dashboard</title>
-    <link rel="stylesheet" href="/static/styles.css">
-  </head>
-  <body>
+    <style>
+        /* ประกาศตัวแปร Global คุมธีมสีย้อมระบบสไตล์มินิมอลดาร์กผสมไลท์โทน */
+        :root {
+            color-scheme: light;
+            --bg: #f6f7f9;
+            --panel: #ffffff;
+            --ink: #17202a;
+            --muted: #687385;
+            --line: #dfe4ea;
+            --accent: #0b7285;
+            --accent-dark: #075866;
+            --soft: #e7f5f8;
+            --warn: #8a4b06;
+            --warn-bg: #fff4df;
+            font-family: "Segoe UI", Tahoma, sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--ink);
+        }
+
+        /* ล็อกขนาดความกว้างหน้าต่างแอปพลิเคชันหลัก */
+        .app {
+            width: min(1180px, calc(100% - 32px));
+            margin: 24px auto 48px;
+        }
+
+        /* จัดเลย์เอาต์หน้าจอแบนเนอร์ด้านบนแบ่งช่องระหว่างข้อความกับตัวเลขนับถอยหลัง */
+        .hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+            gap: 20px;
+            align-items: stretch;
+            margin-bottom: 20px;
+        }
+
+        .hero > div:first-child,
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            box-shadow: 0 12px 30px rgba(21, 30, 43, 0.06);
+        }
+
+        .hero > div:first-child { padding: 28px; }
+
+        .eyebrow {
+            margin: 0 0 8px;
+            color: var(--accent);
+            font-weight: 700;
+            text-transform: uppercase;
+            font-size: 12px;
+        }
+
+        h1, h2 { margin: 0; letter-spacing: 0; }
+        h1 { font-size: 34px; }
+        h2 { font-size: 18px; }
+
+        .sub {
+            max-width: 680px;
+            margin: 12px 0 0;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        /* ดีไซน์หน้าปัดตัวจับเวลาถอยหลังสีพื้นทึบสไตล์ดิจิทัล */
+        .timer {
+            padding: 28px;
+            display: grid;
+            align-content: center;
+            background: #0f1720;
+            color: #fff;
+            border: 1px solid #273447;
+            border-radius: 8px;
+            box-shadow: 0 12px 30px rgba(21, 30, 43, 0.06);
+        }
+
+        .timer span {
+            font-variant-numeric: tabular-nums;
+            font-size: clamp(30px, 5vw, 54px);
+            font-weight: 800;
+        }
+
+        .timer small {
+            color: #b8c2cc;
+            margin-top: 8px;
+        }
+
+        /* หน้าต่าง Grid สองคอลัมน์สมมาตรสำหรับประกบคู่แผ่นบอร์ดชั้นบนสุด */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 20px;
+        }
+
+        .panel {
+            padding: 20px;
+        }
+
+        .wide { grid-column: 1 / -1; }
+
+        /* ควบคุมกลุ่มคอลัมน์ฝั่งขวาบน ให้โครงสร้างยืดส่วนสูงเต็มขอบเขตเพื่อบาลานซ์กับกล่อง Event ซ้ายมือ */
+        .col-stack-right {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            align-self: stretch;
+        }
+
+        /* คลาสช่วยบีบกล่องแจ้งเตือนไม่ให้ยืดตัวเกินขนาดวัตถุภายใน */
+        .content-fit {
+            align-self: flex-start;
+            width: 100%;
+        }
+
+        /* สั่งให้กล่องสถานะขยายตัวเพื่อรับช่วงพื้นที่แนวตั้งที่เหลือทั้งหมดของ Row แถวบน */
+        .status-panel {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+
+        /* ปรับเปลี่ยนกล่อง Log สรุปสถานะ 6 ข้อภายใน ให้ยืดปิดความยาวฐานล่างเต็มแผ่นฟอร์ม */
+        .flex-grow-log {
+            flex-grow: 1;
+            min-height: 180px; 
+        }
+
+        /* สำหรับสั่งให้กล่องพาดขวางยาวสุดขอบจอสองคอลัมน์เต็ม (แถวล่าง) */
+        .full-width {
+            grid-column: span 2;
+        }
+
+        .panelHead {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        label {
+            display: grid;
+            gap: 7px;
+            margin: 13px 0;
+            color: #344054;
+            font-size: 14px;
+            font-weight: 650;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            border: 1px solid #cfd6df;
+            border-radius: 6px;
+            padding: 11px 12px;
+            color: var(--ink);
+            background: #fff;
+            font: inherit;
+        }
+
+        textarea { 
+            resize: vertical; 
+        }
+
+        /* ล็อกกรอบแจ้งเตือนไลน์ไม่ให้ดึงยืดเล่นได้ด้วยมือแต่เปลี่ยนให้ขยายตามตัวอักษรผ่าน JS */
+        #lineMessage {
+            resize: none; 
+            overflow-y: hidden;
+            transition: height 0.1s ease-out;
+        }
+
+        .two {
+            display: grid;
+            grid-template-columns: 1fr 160px;
+            gap: 12px;
+        }
+
+        /* สไตล์โครงสร้างจัดระเบียบตารางฟอร์มสามคอลัมน์ในกล่องทำคิว Schedule */
+        .schedule-form-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            align-items: start;
+        }
+
+        button {
+            border: 0;
+            border-radius: 6px;
+            padding: 11px 14px;
+            background: var(--accent);
+            color: #fff;
+            font-weight: 750;
+            cursor: pointer;
+        }
+
+        button:hover { background: var(--accent-dark); }
+
+        .secondary {
+            background: #263445;
+        }
+
+        .secondary:hover {
+            background: #182230;
+        }
+
+        .ghost {
+            background: var(--soft);
+            color: var(--accent-dark);
+        }
+
+        .ghost:hover {
+            background: #d2edf2;
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+
+        .note {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .warning {
+            background: var(--warn-bg);
+            color: var(--warn);
+            border: 1px solid #f2d5a0;
+            border-radius: 6px;
+            padding: 10px 12px;
+            line-height: 1.5;
+        }
+
+        .checks {
+            display: grid;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .check {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            padding: 10px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+        }
+
+        .check input { width: 18px; margin-top: 2px; }
+
+        .vault {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        /* คุมการเรียงการ์ดช่อง Copy ข้อมูลผู้ซื้อเป็นแบบตาราง 3 คอลัมน์พิกเซลเด่นชัด */
+        .copyGrid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .copyRow {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 8px;
+            align-items: end;
+        }
+
+        .copyRow label { margin: 0; }
+
+        /* ดีไซน์พื้นหลังแผ่นกระดาษกล่องกรอบข้อความ Log สรุป */
+        .statusLog {
+            min-height: 150px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #fbfcfd;
+            padding: 12px;
+            color: #344054;
+            font-size: 14px;
+            line-height: 1.55;
+            margin: 14px 0;
+            overflow: auto;
+        }
+
+        .scheduleItem {
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #fff;
+            margin-bottom: 10px;
+        }
+
+        .scheduleItem button {
+            margin-top: 8px;
+        }
+
+        .toast {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            max-width: min(420px, calc(100% - 40px));
+            padding: 13px 16px;
+            background: #111827;
+            color: #fff;
+            border-radius: 8px;
+            opacity: 0;
+            transform: translateY(12px);
+            transition: 0.2s ease;
+            pointer-events: none;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* สั่งปรับสเกลย้อนกลับมาเป็นแบบแถวเรียงเดี่ยว 1 คอลัมน์แนวตั้งทันทีเมื่อเปิดใช้งานผ่านมือถือ */
+        @media (max-width: 820px) {
+            .hero, .grid, .copyGrid, .two, .vault, .schedule-form-grid {
+                grid-template-columns: 1fr;
+            }
+            .full-width {
+                grid-column: span 1;
+            }
+            .col-stack-right {
+                display: flex;
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
     <main class="app">
-      <section class="hero">
-        <div>
-          <p class="eyebrow">Local ticket preparation</p>
-          <h1>Ticket Prep Dashboard</h1>
-          <p class="sub">เตรียมข้อมูล นับถอยหลัง คัดลอกเร็ว และแจ้งเตือนหลังชำระเงิน โดยให้คุณเป็นคนกดซื้อและยืนยันเอง</p>
-        </div>
-        <div class="timer" aria-live="polite">
-          <span id="countdown">--:--:--.---</span>
-          <small id="timeStatus">ยังไม่ได้ตั้งเวลา</small>
-        </div>
-      </section>
-
-      <section class="grid">
-
-        <form class="panel" id="eventForm">
-          <div class="panelHead">
-            <h2>Event</h2>
-            <button type="button" class="ghost" id="saveAll">บันทึก</button>
-          </div>
-          <label>ชื่อ
-            <input id="eventName" placeholder="เช่น นายสมชาย หรือ Pond เพื่อใช้สรุปข้อมูล">
-          </label>
-          <label>เว็บไซต์
-            <select id="site">
-              <option>Eventpop</option>
-              <option>TICKETIER</option>
-              <option>All Ticket By Counter Service</option>
-              <option>The Concert</option>
-              <option>อื่น ๆ...</option>
-            </select>
-          </label>
-          <label>ลิงก์จำหน่ายบัตร
-            <input id="ticketUrl" placeholder="https://www.eventpop.me/... หรือแผงควบคุมหลัก">
-          </label>
-          <label>วันเวลาเปิดขาย
-            <input type="datetime-local" id="saleTime" step="1">
-          </label>
-          <label>รอบ
-            <input id="round" placeholder="เช่น รอบวันเสาร์ที่ 12, 19:00 น.">
-          </label>
-          <label>โซน
-            <input id="zone" placeholder="เช่น A1, SB, Standing">
-          </label>
-          <label>ราคา
-            <input id="price" placeholder="เช่น 5,500">
-          </label>
-          <div class="actions">
-            <button type="button" id="detectSaleTime">แกะจากข้อความ</button>
-          </div>
-        </form>
-
-        <section class="panel">
-          <div class="panelHead">
-            <h2>LINE Notify คอนเสิร์ต</h2>
-            <button type="button" class="ghost" id="sendLine">ส่งทดสอบ</button>
-          </div>
-          <p class="note">ตั้งค่า Token สำหรับห้องแชทแจ้งข่าวการจองตั๋วแยกจากห้องหลัก</p>
-          <label>LINE Access Token (ตารางก้อนคอนเสิร์ต)
-            <input type="password" id="lineAccessToken" placeholder="คีย์จากหน้าผู้พัฒนา LINE Developer">
-          </label>
-          <label>LINE Channel Secret
-            <input type="password" id="lineChannelSecret" placeholder="คีย์ลับผู้ให้บริการบอต">
-          </label>
-          <label>ข้อความเตรียมสรุป
-            <textarea id="lineMessage" rows="3" placeholder="ระบุเนื้อหาสำคัญในการจองส่งกลุ่ม"></textarea>
-          </label>
-          <div class="actions">
-            <button type="button" id="buildLineMessage">จัดข้อความด่วน</button>
-            <button type="button" id="markPaid">แจ้งเตือนเพื่อน: จ่ายเงินสำเร็จแล้ว</button>
-          </div>
-        </section>
-
-        <section class="panel full-width">
-          <div class="panelHead">
-            <h2>ตารางตั้งเวลาส่งข้อความอัตโนมัติ (Schedules)</h2>
-            <button type="button" class="ghost" id="refreshSchedules">Refresh</button>
-          </div>
-          <p class="note">ตั้งแจ้งเตือน LINE ก่อนขายบัตรอัตโนมัติ 1 วัน, 1 ชั่วโมง, 30 นาที, 15 นาที และ 5 นาที พร้อมแนบลิงก์ขายบัตร</p>
-          <div class="schedule-form-grid">
-            <label>LINE Target ID
-              <input id="scheduleTargetId" placeholder="userId U... หรือ groupId C...">
-            </label>
-            <label>ชื่อผู้จอง
-              <input id="scheduleBuyerName" placeholder="เช่น Pond">
-            </label>
-            <div class="actions" style="margin-top: 31px;">
-              <button type="button" id="createSchedule">ตั้ง Schedule จากข้อมูลหน้านี้</button>
+        <section class="hero">
+            <div>
+                <p class="eyebrow">Local ticket preparation</p>
+                <h1>Ticket Prep Dashboard</h1>
+                <p class="sub">เตรียมข้อมูล นับถอยหลัง คัดลอกเร็ว และแจ้งเตือนหลังชำระเงิน โดยให้คุณเป็นคนกดซื้อและยืนยันเอง</p>
             </div>
-          </div>
-          <div class="statusLog" id="scheduleList"></div>
-          <p class="note">ถ้าจะให้คนใน LINE group ตั้ง schedule ได้ ให้ deploy เว็บนี้เป็น HTTPS แล้วตั้ง Webhook URL เป็น <code>/api/line-webhook</code></p>
+            <div class="timer" aria-live="polite">
+                <span id="countdown">--:--:--.---</span>
+                <small id="timeStatus">ยังไม่ได้ตั้งเวลา</small>
+            </div>
         </section>
 
-        <section class="panel full-width">
-          <div class="panelHead">
-            <h2>ข้อมูลผู้ซื้อ</h2>
-          </div>
-          <div class="copyGrid" id="buyerFields"></div>
-        </section>
+        <section class="grid">
+            <form class="panel" id="eventForm">
+                <div class="panelHead">
+                    <h2>Event</h2>
+                    <button type="button" class="ghost" id="saveAll">บันทึก</button>
+                </div>
+                <label>ชื่อ
+                    <input id="eventName" placeholder="เช่น นายสมชาย หรือ Pond เพื่อใช้สรุปข้อมูล">
+                </label>
+                <label>เว็บไซต์
+                    <select id="site">
+                        <option>Eventpop</option>
+                        <option>TICKETIER</option>
+                        <option>All Ticket By Counter Service</option>
+                        <option>The Concert</option>
+                        <option>อื่น ๆ</option>
+                    </select>
+                </label>
+                <label>URL งาน
+                    <input id="eventUrl" type="url" placeholder="https://...">
+                </label>
+                <div class="two">
+                    <label>เวลาเปิดขาย
+                        <input id="saleTime" type="datetime-local" step="0.001">
+                    </label>
+                    <label>จำนวนที่นั่ง
+                        <input id="seatCount" type="number" min="1" max="20" value="2">
+                    </label>
+                </div>
+                <label>โซนหลัก
+                    <input id="primaryZone" placeholder="เช่น A1, STANDING A">
+                </label>
+                <label>ราคารวมทั้งหมด
+                    <input id="totalPrice" type="number" min="0" step="0.01" placeholder="เช่น 12000">
+                </label>
+                <label>แผนสำรอง
+                    <textarea id="backupPlan" rows="4" placeholder="เช่น B1 > B2 > C, ถ้าไม่ได้ 2 ที่ติดกันยอมแยกไหม"></textarea>
+                </label>
+                <div class="actions">
+                    <button type="button" id="openSite">เปิดหน้าเว็บ</button>
+                    <button type="button" class="secondary" id="syncTime">ดึงเวลาจากเว็บต้นทาง</button>
+                    <button type="button" class="secondary" id="detectSaleTime">ดึงเวลาเปิดขายจาก URL</button>
+                </div>
+                <p class="note" id="targetTimeNote">ยังไม่ได้เลือกเวลาเปิดขาย</p>
+                <p class="note" id="detectedTimeNote">ระบบจะพยายามอ่านข้อความวัน/เวลาเปิดขายจากหน้าเว็บ ถ้าเว็บซ่อนข้อมูลไว้ อาจต้องใส่เอง</p>
+                <label>ข้อความจากหน้าเว็บ กรณีดึง URL ไม่ได้
+                    <textarea id="eventText" rows="3" placeholder="คัดลอกข้อความที่เห็นบนหน้า Eventpop เช่น 06 Jun 2026 at 18:00 หรือข้อความเวลาเปิดขาย มาวางตรงนี้"></textarea>
+                </label>
+                <button type="button" class="secondary" id="detectSaleTimeFromText">ดึงเวลาจากข้อความที่วาง</button>
+                <p class="note" id="serverTimeNote">ระบบจะอ่าน Date header จาก URL งาน เพื่อเทียบเวลาท้องถิ่นกับเวลาฝั่งเซิร์ฟเวอร์เท่าที่เว็บอนุญาต</p>
+            </form>
 
-        <section class="panel full-width">
-          <h2>ข้อมูลบัตร</h2>
-          <p class="warning">เก็บเฉพาะเลขบัตรและวันหมดอายุแบบเข้ารหัสในเครื่อง ไม่เก็บ CVV และไม่กดยืนยันชำระเงินแทนคุณ</p>
-          <div class="copyGrid" id="cardFields"></div>
-        </section>
+            <div class="col-stack-right">
+                <section class="panel content-fit">
+                    <h2>แจ้งเตือน</h2>
+                    <label>ข้อความ
+                        <textarea id="lineMessage">ชำระเงินสำเร็จแล้ว โปรดตรวจสอบอีเมล/บัญชีเว็บขายบัตร</textarea>
+                    </label>
+                    <button type="button" class="secondary" id="buildLineMessage">สร้างข้อความสรุป</button>
+                    <button type="button" id="sendLine">ส่งแจ้งเตือน LINE</button>
+                    <p class="note" id="lineConfigNote">LINE Notify ปิดบริการแล้ว จึงใช้ LINE Messaging API แทน</p>
+                </section>
 
-      </section>
+                <section class="panel status-panel">
+                    <h2>สถานะ</h2>
+                    <div class="statusLog flex-grow-log" id="statusLog"></div>
+                    <button type="button" class="secondary" id="markPaid">บันทึกว่า "ชำระเงินสำเร็จ"</button>
+                </section>
+            </div>
+
+            <section class="panel full-width">
+                <div class="panelHead">
+                    <h2>Schedule Event</h2>
+                    <button type="button" class="ghost" id="refreshSchedules">Refresh</button>
+                </div>
+                <p class="note">ตั้งแจ้งเตือน LINE ก่อนขายบัตรอัตโนมัติ 1 วัน, 1 ชั่วโมง, 30 นาที, 15 นาที และ 5 นาที พร้อมแนบลิงก์ขายบัตร</p>
+                <div class="schedule-form-grid">
+                    <label>LINE Target ID
+                        <input id="scheduleTargetId" placeholder="userId U... หรือ groupId C...">
+                    </label>
+                    <label>ชื่อผู้จอง
+                        <input id="scheduleBuyerName" placeholder="เช่น Pond">
+                    </label>
+                    <div class="actions" style="margin-top: 31px;">
+                        <button type="button" id="createSchedule">ตั้ง Schedule จากข้อมูลหน้านี้</button>
+                    </div>
+                </div>
+                <div class="statusLog" id="scheduleList"></div>
+                <p class="note">ถ้าจะให้คนใน LINE group ตั้ง schedule ได้ ให้ deploy เว็บนี้เป็น HTTPS แล้วตั้ง Webhook URL เป็น <code>/api/line-webhook</code></p>
+            </section>
+
+            <section class="panel full-width">
+                <div class="panelHead">
+                    <h2>ข้อมูลผู้ซื้อ</h2>
+                </div>
+                <div class="copyGrid" id="buyerFields"></div>
+            </section>
+
+            <section class="panel full-width">
+                <h2>ข้อมูลบัตร</h2>
+                <p class="warning">เก็บเฉพาะเลขบัตรและวันหมดอายุแบบเข้ารหัสในเครื่อง ไม่เก็บ CVV และไม่กดยืนยันชำระเงินแทนคุณ</p>
+                <div class="copyGrid" id="cardFields"></div>
+            </section>
+        </section>
     </main>
-    <script src="/static/app.js"></script>
-  </body>
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // =================================================================
+        // [อัปเดตล่าสุด 2026-05-21]: รวม JS ทั้งหมดในไฟล์เดียวตามโครงสร้างเป้าหมาย
+        // =================================================================
+        
+        const $ = (id) => document.getElementById(id);
+        
+        // ข้อมูลจำลองโครงสร้างฟิลด์ฝั่งผู้ซื้อ
+        const buyerFields = [
+            ["firstName", "ชื่อ"],
+            ["lastName", "นามสกุล"],
+            ["address", "ที่อยู่"],
+            ["subdistrict", "ตำบล"],
+            ["district", "อำเภอ"],
+            ["province", "จังหวัด"],
+            ["postalCode", "รหัสไปรษณีย์"],
+            ["phone", "เบอร์โทร"],
+            ["email", "อีเมล"]
+        ];
+        
+        // ข้อมูลจำลองโครงสร้างฟิลด์ฝั่งบัตรชำระเงิน
+        const cardFields = [
+            ["cardNumber", "เลขบัตร", "password"],
+            ["cardExpiry", "ดด/ปป", "text"]
+        ];
+        
+        let vault = {};
+        let offsetMs = 0;
+        let saleTargetMs = null;
+        let alarmed = false;
+        
+        // =================================================================
+        // [อัปเดตล่าสุด 2026-05-20]: แปลงรูปแบบวันเวลาเป็น dd-mm-yyyy HH:MM:SS.ms
+        // =================================================================
+        function formatLocalDateTime(date) {
+            const pad = (value, size = 2) => String(value).padStart(size, "0");
+            return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+        }
+        
+        function toast(message) {
+            const box = $("toast");
+            if (!box) return;
+            box.textContent = message;
+            box.classList.add("show");
+            setTimeout(() => box.classList.remove("show"), 2600);
+        }
+        
+        function updateStatusLogView() {
+            const customName = $("eventName") ? $("eventName").value.trim() : "";
+            const seatCount = $("seatCount") ? $("seatCount").value : "-";
+            const primaryZone = $("primaryZone") ? $("primaryZone").value : "-";
+            const eventSlug = getEventSlug();
+            const totalPrice = Number($("totalPrice") ? $("totalPrice").value : 0);
+            const countNum = Number(seatCount || 0);
+            const perTicket = countNum > 0 && totalPrice > 0 ? totalPrice / countNum : 0;
+            const priceText = perTicket ? `${perTicket.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท/ใบ (รวม ${totalPrice.toLocaleString("th-TH")} บาท)` : "-";
+            const urlValue = $("eventUrl") ? $("eventUrl").value.trim() : "-";
+            const statusLog = $("statusLog");
+            if (statusLog) {
+                statusLog.innerHTML = `<div style="font-family: monospace; white-space: pre-wrap; line-height: 1.6;">1. ชื่อ : ${customName || "-"}\n2. จำนวนบัตร : ${seatCount || "-"}\n3. โซน : ${primaryZone || "-"}\n4. ชื่องาน : ${eventSlug || "-"}\n5. ราคาบัตร : ${priceText}\n6. ลิงก์งาน : ${urlValue || "-"}</div>`;
+            }
+        }
+        
+        function makeField(container, [id, label, type = "text"]) {
+            if (!container) return;
+            const row = document.createElement("div");
+            row.className = "copyRow";
+            row.innerHTML = `<label>${label}<input id="${id}" data-label="${label}" type="${type}" autocomplete="off"></label><button type="button" class="secondary" data-copy="${id}">Copy</button>`;
+            container.appendChild(row);
+        }
+        
+        function renderFields() {
+            const buyerContainer = $("buyerFields");
+            const cardContainer = $("cardFields");
+            if (buyerContainer) buyerFields.forEach((field) => makeField(buyerContainer, field));
+            if (cardContainer) cardFields.forEach((field) => makeField(cardContainer, field));
+            document.querySelectorAll("[data-copy]").forEach((button) => {
+                button.addEventListener("click", () => {
+                    const input = $(button.dataset.copy);
+                    if (input && input.value) navigator.clipboard.writeText(input.value);
+                });
+            });
+        }
+        
+        function collectPlainState() {
+            const ids = ["eventName", "site", "eventUrl", "saleTime", "seatCount", "primaryZone", "totalPrice", "backupPlan", "lineMessage", "scheduleTargetId", "scheduleBuyerName"];
+            const state = {};
+            ids.forEach((id) => { const el = $(id); if (el) state[id] = el.value; });
+            return state;
+        }
+        
+        function restorePlainState() {
+            const state = JSON.parse(localStorage.getItem("ticketPrepState") || "{}");
+            Object.entries(state).forEach(([id, value]) => { const el = $(id); if (el) el.value = value; });
+            updateSaleTarget();
+            updateStatusLogView();
+        }
+        
+        function collectVault() {
+            [...buyerFields, ...cardFields].forEach(([id]) => { const el = $(id); if (el) vault[id] = el.value; });
+        }
+        
+        function fillVault() {
+            const savedPlain = localStorage.getItem("ticketPrepVaultPlain");
+            if (savedPlain) {
+                vault = JSON.parse(savedPlain);
+                [...buyerFields, ...cardFields].forEach(([id]) => { const el = $(id); if (el) el.value = vault[id] || ""; });
+            }
+        }
+        
+        async function saveVault() {
+            collectVault();
+            localStorage.setItem("ticketPrepVaultPlain", JSON.stringify(vault));
+        }
+        
+        function updateSaleTarget() {
+            const saleTimeEl = $("saleTime");
+            if (!saleTimeEl) return;
+            const value = saleTimeEl.value;
+            saleTargetMs = value ? new Date(value).getTime() : null;
+            alarmed = false;
+            const targetTimeNote = $("targetTimeNote");
+            if (targetTimeNote) {
+                if (!saleTargetMs) targetTimeNote.textContent = "ยังไม่ได้เลือกเวลาเปิดขาย";
+                else targetTimeNote.textContent = `โปรแกรมอ่านเวลาเปิดขายเป็น ${formatLocalDateTime(new Date(saleTargetMs))} ตาม timezone ของเครื่อง`;
+            }
+        }
+        
+        function formatMs(ms) {
+            const sign = ms < 0 ? "-" : "";
+            const abs = Math.abs(ms);
+            const hours = Math.floor(abs / 3600000);
+            const minutes = Math.floor(abs % 3600000 / 60000);
+            const seconds = Math.floor(abs % 60000 / 1000);
+            const millis = Math.floor(abs % 1000);
+            return `${sign}${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+        }
+        
+        function tick() {
+            const countdownEl = $("countdown");
+            const timeStatusEl = $("timeStatus");
+            if (!countdownEl) return;
+            if (!saleTargetMs) { countdownEl.textContent = "--:--:--.---"; return; }
+            const now = Date.now() + offsetMs;
+            const remaining = saleTargetMs - now;
+            countdownEl.textContent = formatMs(remaining);
+            if (timeStatusEl) timeStatusEl.textContent = remaining < 0 ? "เลยเวลาเปิดขายแล้ว" : `เหลือเวลา ${formatMs(remaining)}`;
+            if (remaining <= 0 && !alarmed) { alarmed = true; toast("ถึงเวลาเปิดขายแล้ว"); }
+        }
+        
+        async function syncTime() {
+            const serverTimeNote = $("serverTimeNote");
+            if (!serverTimeNote) return;
+            serverTimeNote.textContent = "กำลังเชื่อมต่อเพื่อซิงค์เวลาเซิร์ฟเวอร์...";
+            try {
+                const start = Date.now();
+                const res = await fetch("/", { method: "HEAD", cache: "no-cache" });
+                const end = Date.now();
+                const latency = (end - start) / 2;
+                const serverDateStr = res.headers.get("Date");
+                if (!serverDateStr) throw new Error("ไม่พบข้อมูลกำกับเวลาใน HTTP Header");
+                const serverTime = new Date(serverDateStr).getTime() + latency;
+                const localTime = Date.now();
+                offsetMs = serverTime - localTime;
+                serverTimeNote.textContent = `เทียบเวลาสำเร็จ: offset ${offsetMs} ms, latency ${Math.round(latency)} ms`;
+                toast("ซิงค์เวลาเรียบร้อยแล้ว");
+            } catch (error) {
+                offsetMs = 0;
+                serverTimeNote.textContent = `ดึงเวลาล้มเหลว: ${error.message} (ใช้เวลาคอมพิวเตอร์คุณแทน)`;
+                toast("ดึงเวลาล้มเหลว");
+            }
+        }
+        
+        // =================================================================
+        // [อัปเดตล่าสุด 2026-05-20]: ฟังก์ชันวิเคราะห์ภาษาและแปลงวันเวลา
+        // รองรับรูปแบบไทย, อังกฤษ, ตัวเลขล้วน, แปลงปี พ.ศ. อัตโนมัติ
+        // =================================================================
+        function parseDateTimeFromText(rawText) {
+            if (!rawText) return null;
+            let text = rawText.trim();
+            let originalText = text;
+            text = text.replace(/[นน\.]+$/g, '').trim();
+            text = text.replace(/เวลา/g, ' ').trim();
+            const thaiNumbers = { '๐': '0', '๑': '1', '๒': '2', '๓': '3', '๔': '4', '๕': '5', '๖': '6', '๗': '7', '๘': '8', '๙': '9' };
+            text = text.replace(/[๐-๙]/g, (match) => thaiNumbers[match]);
+            
+            // รูปแบบภาษาไทย พ.ศ.
+            const thaiMonthPattern = /(\d{1,2})\s+(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม|ม\.ค\.|ก\.พ\.|มี\.ค\.|เม\.ย\.|พ\.ค\.|มิ\.ย\.|ก\.ค\.|ส\.ค\.|ก\.ย\.|ต\.ค\.|พ\.ย\.|ธ\.ค\.|มค|กพ|มีค|เมย|พค|มิย|กค|สค|กย|ตค|พย|ธค)\s+(\d{3,4})(?:\s+)?(\d{1,2}:\d{2})?/i;
+            const thaiMatch = text.match(thaiMonthPattern);
+            if (thaiMatch) {
+                let day = parseInt(thaiMatch[1], 10);
+                let thaiMonth = thaiMatch[2].toLowerCase();
+                let yearBE = parseInt(thaiMatch[3], 10);
+                let timeStr = thaiMatch[4] || "";
+                let yearCE = yearBE > 2500 ? yearBE - 543 : (yearBE < 100 ? yearBE + 2000 : yearBE);
+                const monthMap = { "มกราคม":0, "ม.ค.":0, "มค":0, "กุมภาพันธ์":1, "ก.พ.":1, "กพ":1, "มีนาคม":2, "มี.ค.":2, "มีค":2, "เมษายน":3, "เม.ย.":3, "เมย":3, "พฤษภาคม":4, "พ.ค.":4, "พค":4, "มิถุนายน":5, "มิ.ย.":5, "มิย":5, "กรกฎาคม":6, "ก.ค.":6, "กค":6, "สิงหาคม":7, "ส.ค.":7, "สค":7, "กันยายน":8, "ก.ย.":8, "กย":8, "ตุลาคม":9, "ต.ค.":9, "ตค":9, "พฤศจิกายน":10, "พ.ย.":10, "พย":10, "ธันวาคม":11, "ธ.ค.":11, "ธค":11 };
+                let month = monthMap[thaiMonth] || 0;
+                let hours = 10, minutes = 0;
+                if (timeStr) { const tm = timeStr.match(/(\d{1,2}):(\d{2})/); if (tm) { hours = parseInt(tm[1],10); minutes = parseInt(tm[2],10); } }
+                else { const tmAny = text.match(/(\d{1,2}):(\d{2})/); if (tmAny) { hours = parseInt(tmAny[1],10); minutes = parseInt(tmAny[2],10); } }
+                const finalDate = new Date(yearCE, month, day, hours, minutes, 0);
+                if (isNaN(finalDate.getTime())) return null;
+                return { finalDate, isoLocal: `${finalDate.getFullYear()}-${String(finalDate.getMonth()+1).padStart(2,"0")}-${String(finalDate.getDate()).padStart(2,"0")}T${String(finalDate.getHours()).padStart(2,"0")}:${String(finalDate.getMinutes()).padStart(2,"0")}:00`, matchedText: originalText.substring(0,60) };
+            }
+            
+            // รูปแบบภาษาอังกฤษ
+            const enMonthPattern = /(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+(\d{2,4})(?:\s+)?(\d{1,2}:\d{2})?/i;
+            const enMatch = text.match(enMonthPattern);
+            if (enMatch) {
+                let day = parseInt(enMatch[1],10);
+                let monthStr = enMatch[2].toLowerCase();
+                let year = parseInt(enMatch[3],10);
+                let timeStr = enMatch[4] || "";
+                if (year < 100) year += 2000;
+                if (year > 2500) year -= 543;
+                const monthMap = { "january":0,"jan":0,"february":1,"feb":1,"march":2,"mar":2,"april":3,"apr":3,"may":4,"june":5,"jun":5,"july":6,"jul":6,"august":7,"aug":7,"september":8,"sep":8,"october":9,"oct":9,"november":10,"nov":10,"december":11,"dec":11 };
+                let month = monthMap[monthStr] || 0;
+                let hours = 10, minutes = 0;
+                if (timeStr) { const tm = timeStr.match(/(\d{1,2}):(\d{2})/); if (tm) { hours = parseInt(tm[1],10); minutes = parseInt(tm[2],10); } }
+                else { const tmAny = text.match(/(\d{1,2}):(\d{2})/); if (tmAny) { hours = parseInt(tmAny[1],10); minutes = parseInt(tmAny[2],10); } }
+                const finalDate = new Date(year, month, day, hours, minutes, 0);
+                if (isNaN(finalDate.getTime())) return null;
+                return { finalDate, isoLocal: `${finalDate.getFullYear()}-${String(finalDate.getMonth()+1).padStart(2,"0")}-${String(finalDate.getDate()).padStart(2,"0")}T${String(finalDate.getHours()).padStart(2,"0")}:${String(finalDate.getMinutes()).padStart(2,"0")}:00`, matchedText: originalText.substring(0,60) };
+            }
+            
+            // รูปแบบตัวเลขล้วน
+            const dateTimeMatch = text.match(/(\d{1,4})[-/.](\d{1,2})[-/.](\d{1,4})(?:\s+)?(\d{1,2}:\d{2})?/);
+            if (dateTimeMatch) {
+                let p1 = parseInt(dateTimeMatch[1],10), p2 = parseInt(dateTimeMatch[2],10), p3 = parseInt(dateTimeMatch[3],10), timeStr = dateTimeMatch[4] || "";
+                let year, month, day;
+                if (p1 > 31) { year = p1; month = p2 - 1; day = p3; }
+                else { day = p1; month = p2 - 1; year = p3; }
+                if (year > 2500) year -= 543;
+                if (year < 100) year += 2000;
+                let hours = 10, minutes = 0;
+                if (timeStr) { const tm = timeStr.match(/(\d{1,2}):(\d{2})/); if (tm) { hours = parseInt(tm[1],10); minutes = parseInt(tm[2],10); } }
+                else { const tmAny = text.match(/(\d{1,2}):(\d{2})/); if (tmAny) { hours = parseInt(tmAny[1],10); minutes = parseInt(tmAny[2],10); } }
+                const finalDate = new Date(year, month, day, hours, minutes, 0);
+                if (isNaN(finalDate.getTime())) return null;
+                return { finalDate, isoLocal: `${finalDate.getFullYear()}-${String(finalDate.getMonth()+1).padStart(2,"0")}-${String(finalDate.getDate()).padStart(2,"0")}T${String(finalDate.getHours()).padStart(2,"0")}:${String(finalDate.getMinutes()).padStart(2,"0")}:00`, matchedText: originalText.substring(0,60) };
+            }
+            return null;
+        }
+        
+        async function detectSaleTime() {
+            const eventUrl = $("eventUrl");
+            if (!eventUrl || !eventUrl.value.trim()) { toast("กรุณาใส่ URL งานก่อน"); return; }
+            const detectedTimeNote = $("detectedTimeNote");
+            if (detectedTimeNote) detectedTimeNote.textContent = "กำลังอ่านวัน/เวลาเปิดขายจากหน้าเว็บ...";
+            try {
+                const res = await fetch(`/api/event-time?url=${encodeURIComponent(eventUrl.value.trim())}`);
+                const data = await res.json();
+                if (!data.ok) throw new Error(data.error);
+                const parsed = parseDateTimeFromText(data.matchedText || data.isoLocal);
+                if (!parsed) throw new Error("ไม่สามารถประมวลผลรูปแบบวันที่ได้");
+                const saleTimeEl = $("saleTime");
+                if (saleTimeEl) saleTimeEl.value = parsed.isoLocal;
+                updateSaleTarget();
+                if (detectedTimeNote) detectedTimeNote.textContent = `พบเวลา: ${formatLocalDateTime(parsed.finalDate)} จากข้อความ "${parsed.matchedText}"`;
+                toast("ดึงเวลาเปิดขายสำเร็จ");
+            } catch (error) {
+                if (detectedTimeNote) detectedTimeNote.textContent = `ดึงเวลาเปิดขายจาก URL ไม่ได้: ${error.message}`;
+                toast("หาเวลาเปิดขายจาก URL ไม่เจอ");
+            }
+        }
+        
+        async function detectSaleTimeFromText() {
+            const eventText = $("eventText");
+            if (!eventText || !eventText.value.trim()) { toast("กรุณาวางข้อความจากหน้าเว็บก่อน"); return; }
+            const detectedTimeNote = $("detectedTimeNote");
+            if (detectedTimeNote) detectedTimeNote.textContent = "กำลังวิเคราะห์โครงสร้างภาษาไทย/อังกฤษจากข้อความ...";
+            try {
+                const parsed = parseDateTimeFromText(eventText.value);
+                if (!parsed) throw new Error("ไม่พบโครงสร้างวันเวลาที่ระบุ");
+                const saleTimeEl = $("saleTime");
+                if (saleTimeEl) saleTimeEl.value = parsed.isoLocal;
+                updateSaleTarget();
+                if (detectedTimeNote) detectedTimeNote.textContent = `พบเวลา: ${formatLocalDateTime(parsed.finalDate)} จากข้อความ "${parsed.matchedText}"`;
+                toast("ดึงเวลาจากข้อความสำเร็จ");
+            } catch (error) {
+                if (detectedTimeNote) detectedTimeNote.textContent = `ดึงเวลาจากข้อความไม่ได้: ${error.message}`;
+                toast("หาเวลาในข้อความไม่เจอ");
+            }
+        }
+        
+        function openSite() {
+            const eventUrl = $("eventUrl");
+            if (!eventUrl || !eventUrl.value.trim()) { toast("กรุณาใส่ URL งานก่อน"); return; }
+            window.open(eventUrl.value.trim(), "_blank", "noopener,noreferrer");
+        }
+        
+        function getEventSlug() {
+            const eventUrl = $("eventUrl");
+            if (!eventUrl || !eventUrl.value.trim()) return "";
+            try {
+                const urlObj = new URL(eventUrl.value.trim());
+                const match = urlObj.pathname.match(/\/([^/]+)\/?$/);
+                return match ? match[1] : "";
+            } catch { return ""; }
+        }
+        
+        function buildSummaryMessage() {
+            const customName = $("eventName") ? $("eventName").value.trim() : "";
+            const seatCount = $("seatCount") ? $("seatCount").value : "0";
+            const totalPriceVal = $("totalPrice") ? $("totalPrice").value : "0";
+            const totalPrice = Number(totalPriceVal || 0);
+            const countNum = Number(seatCount || 0);
+            const perTicket = countNum > 0 && totalPrice > 0 ? totalPrice / countNum : 0;
+            const priceText = perTicket ? `${perTicket.toLocaleString("th-TH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท/ใบ (รวม ${totalPrice.toLocaleString("th-TH")} บาท)` : "-";
+            return [
+                `1. ชื่อ : ${customName || "-"}`,
+                `2. จำนวนบัตร : ${$("seatCount") ? $("seatCount").value : "-"}`,
+                `3. โซน : ${$("primaryZone") ? $("primaryZone").value : "-"}`,
+                `4. ชื่องาน : ${getEventSlug() || "-"}`,
+                `5. ราคาบัตร : ${priceText}`,
+                `6. ลิงก์งาน : ${$("eventUrl") ? $("eventUrl").value.trim() : "-"}`
+            ].join("\n");
+        }
+        
+        function schedulePayload() {
+            return {
+                targetId: $("scheduleTargetId") ? $("scheduleTargetId").value.trim() : "",
+                buyerName: $("scheduleBuyerName") ? ($("scheduleBuyerName").value.trim() || ($("eventName") ? $("eventName").value.trim() : "")) : "",
+                seatCount: $("seatCount") ? $("seatCount").value : "",
+                zone: $("primaryZone") ? $("primaryZone").value : "",
+                name: getEventSlug(),
+                url: $("eventUrl") ? $("eventUrl").value.trim() : "",
+                totalPrice: $("totalPrice") ? $("totalPrice").value : "",
+                saleTime: $("saleTime") ? $("saleTime").value : "",
+                site: $("site") ? $("site").value : ""
+            };
+        }
+        
+        async function loadSchedules() {
+            const list = $("scheduleList");
+            if (!list) return;
+            try {
+                const res = await fetch("/api/schedules");
+                const data = await res.json();
+                if (!data.ok) throw new Error(data.error);
+                if (!data.schedules.length) { list.innerHTML = "ยังไม่มี schedule"; return; }
+                list.innerHTML = data.schedules.map((schedule) => {
+                    const sent = (schedule.reminders || []).filter((item) => item.sentAt).map((item) => item.label).join(", ") || "-";
+                    return `<div class="scheduleItem"><strong>${schedule.name || "-"}</strong><br>เวลาเปิดขาย: ${schedule.saleTime || "-"}<br>เว็บไซต์: ${schedule.site || "-"}<br>Target: ${schedule.targetId || "-"}<br>ลิงก์: ${schedule.url || "-"}<br>ส่งแล้ว: ${sent}<br><button type="button" class="secondary" data-delete-schedule="${schedule.id}">ลบ</button></div>`;
+                }).join("");
+                document.querySelectorAll("[data-delete-schedule]").forEach((button) => {
+                    button.addEventListener("click", async () => {
+                        await fetch(`/api/schedules/${encodeURIComponent(button.dataset.deleteSchedule)}`, { method: "DELETE" });
+                        loadSchedules();
+                    });
+                });
+            } catch (error) {
+                list.textContent = `โหลด schedule ไม่ได้: ${error.message}`;
+            }
+        }
+        
+        async function createScheduleFromPage() {
+            const payload = schedulePayload();
+            if (!payload.targetId || !payload.saleTime || !payload.url) {
+                toast("กรุณาใส่ LINE Target ID, URL งาน และเวลาเปิดขาย");
+                return;
+            }
+            try {
+                const res = await fetch("/api/schedules", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!data.ok) throw new Error(data.error);
+                toast("ตั้ง Schedule สำเร็จ");
+                loadSchedules();
+                const summaryMsg = buildSummaryMessage();
+                await fetch("/api/line-push", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ targetId: payload.targetId, message: `🔔 ตั้งคร็อนคิว Schedule สำเร็จแล้ว!\n\n${summaryMsg}` })
+                });
+            } catch (error) {
+                toast("ตั้ง Schedule ไม่สำเร็จ");
+            }
+        }
+        
+        function autoResizeTextarea(textarea) {
+            if (!textarea) return;
+            textarea.style.height = 'auto';
+            textarea.style.height = textarea.scrollHeight + 'px';
+        }
+        
+        function setLineSummaryMessage() {
+            const lineMessage = $("lineMessage");
+            if (lineMessage) {
+                lineMessage.value = buildSummaryMessage();
+                localStorage.setItem("ticketPrepState", JSON.stringify(collectPlainState()));
+                autoResizeTextarea(lineMessage);
+            }
+            toast("สร้างข้อความสรุปแล้ว");
+        }
+        
+        async function sendLine() {
+            const message = $("lineMessage") ? $("lineMessage").value.trim() : "";
+            const targetId = $("scheduleTargetId") ? $("scheduleTargetId").value.trim() : "";
+            if (!targetId) { toast("กรุณากรอก LINE Target ID ก่อนสั่งส่งข้อความ!"); return; }
+            if (!message) { toast("กรุณากรอกข้อความ"); return; }
+            try {
+                const res = await fetch("/api/line-push", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ message, targetId })
+                });
+                const data = await res.json();
+                if (!data.ok) throw new Error(data.error);
+                toast("ส่ง LINE สำเร็จ");
+            } catch (error) {
+                toast("ส่ง LINE ไม่สำเร็จ");
+            }
+        }
+        
+        async function checkConfigStatus() {
+            try {
+                const res = await fetch("/api/config-status");
+                const data = await res.json();
+                if (!data.ok) return;
+                const lineConfigNote = $("lineConfigNote");
+                if (lineConfigNote) lineConfigNote.textContent = `LINE Messaging API: ${data.lineTokenConfigured ? "มี token แล้ว" : "ยังไม่มี token"}, ${data.lineUserConfigured ? "มี user/group ID แล้ว" : "ยังไม่มี user/group ID"}, ${data.lineSecretConfigured ? "มี channel secret แล้ว" : "ยังไม่มี channel secret"}`;
+            } catch { const note = $("lineConfigNote"); if (note) note.textContent = "LINE Notify ปิดบริการแล้ว จึงใช้ LINE Messaging API แทน"; }
+        }
+        
+        function saveAll() {
+            localStorage.setItem("ticketPrepState", JSON.stringify(collectPlainState()));
+            saveVault();
+            toast("บันทึกข้อมูลหน้าเว็บสำเร็จ");
+        }
+        
+        function markPaid() {
+            const lineMessage = $("lineMessage");
+            if (lineMessage) lineMessage.value = buildSummaryMessage();
+            toast("บันทึกสถานะสำเร็จ");
+        }
+        
+        // =================================================================
+        // [อัปเดตล่าสุด 2026-05-21]: เริ่มต้นผูกระบบการทำงานหลัก
+        // =================================================================
+        document.addEventListener("DOMContentLoaded", () => {
+            renderFields();
+            restorePlainState();
+            fillVault();
+            checkConfigStatus();
+            loadSchedules();
+            setInterval(tick, 50);
+            
+            const saveAllBtn = $("saveAll");
+            const openSiteBtn = $("openSite");
+            const syncTimeBtn = $("syncTime");
+            const detectSaleTimeBtn = $("detectSaleTime");
+            const detectSaleTimeFromTextBtn = $("detectSaleTimeFromText");
+            const sendLineBtn = $("sendLine");
+            const buildLineMessageBtn = $("buildLineMessage");
+            const markPaidBtn = $("markPaid");
+            const saleTimeEl = $("saleTime");
+            const createScheduleBtn = $("createSchedule");
+            const refreshSchedulesBtn = $("refreshSchedules");
+            const lineMessageEl = $("lineMessage");
+            
+            if (saveAllBtn) saveAllBtn.addEventListener("click", saveAll);
+            if (openSiteBtn) openSiteBtn.addEventListener("click", openSite);
+            if (syncTimeBtn) syncTimeBtn.addEventListener("click", syncTime);
+            if (detectSaleTimeBtn) detectSaleTimeBtn.addEventListener("click", detectSaleTime);
+            if (detectSaleTimeFromTextBtn) detectSaleTimeFromTextBtn.addEventListener("click", detectSaleTimeFromText);
+            if (sendLineBtn) sendLineBtn.addEventListener("click", sendLine);
+            if (buildLineMessageBtn) buildLineMessageBtn.addEventListener("click", setLineSummaryMessage);
+            if (markPaidBtn) markPaidBtn.addEventListener("click", markPaid);
+            if (saleTimeEl) saleTimeEl.addEventListener("change", updateSaleTarget);
+            if (createScheduleBtn) createScheduleBtn.addEventListener("click", createScheduleFromPage);
+            if (refreshSchedulesBtn) refreshSchedulesBtn.addEventListener("click", loadSchedules);
+            
+            document.querySelectorAll("input, textarea, select").forEach((input) => {
+                input.addEventListener("input", () => {
+                    localStorage.setItem("ticketPrepState", JSON.stringify(collectPlainState()));
+                    updateStatusLogView();
+                });
+            });
+            
+            const buyerInputs = document.querySelectorAll("#buyerFields input");
+            const cardInputs = document.querySelectorAll("#cardFields input");
+            buyerInputs.forEach((input) => input.addEventListener("change", saveVault));
+            cardInputs.forEach((input) => input.addEventListener("change", saveVault));
+            
+            if (lineMessageEl) lineMessageEl.addEventListener("input", function() { autoResizeTextarea(this); });
+            
+            setTimeout(() => {
+                if (lineMessageEl) autoResizeTextarea(lineMessageEl);
+                updateStatusLogView();
+            }, 150);
+        });
+    </script>
+</body>
 </html>
