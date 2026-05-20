@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ticket Prep Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class=\"app\">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Local ticket preparation</p>
+          <h1>Ticket Prep Dashboard</h1>
+          <p class="sub">เตรียมข้อมูล นับถอยหลัง คัดลอกเร็ว และแจ้งเตือนหลังชำระเงิน โดยให้คุณเป็นคนกดซื้อและยืนยันเอง</p>
+        </div>
+        <div class="timer" aria-live="polite">
+          <span id="countdown">--:--:--.---</span>
+          <small id="timeStatus">ยังไม่ได้ตั้งเวลา</small>
+        </div>
+      </section>
+
+      <section class="grid">
+
+        <form class="panel" id="eventForm">
+          <div class="panelHead">
+            <h2>Event</h2>
+            <button type="button" class="ghost" id="saveAll">บันทึก</button>
+          </div>
+          <label>ชื่อ\n            <input id="eventName" placeholder="เช่น นายสมชาย หรือ Pond เพื่อใช้สรุปข้อมูล">
+          </label>
+          <label>เว็บไซต์\n            <select id="site">
+              <option>Eventpop</option>
+              <option>TICKETIER</option>\n              <option>All Ticket By Counter Service</option>
+              <option>The Concert</option>
+              <option>อื่น ๆ...</option>
+            </select>
+          </label>
+          <label>ลิงก์จำหน่ายบัตร\n            <input id="ticketUrl" placeholder="https://www.eventpop.me/... หรือแผงควบคุมหลัก">
+          </label>
+          <label>วันเวลาเปิดขาย\n            <input type="datetime-local" id="saleTime" step="1">
+          </label>
+          <div class="actions">
+            <button type="button" id="detectSaleTime">แกะจากข้อความ</button>
+          </div>
+        </form>
+
+        <section class="panel">
+          <div class="panelHead">
+            <h2>LINE Notify คอนเสิร์ต</h2>
+            <button type="button" class="ghost" id="sendLine">ส่งทดสอบ</button>
+          </div>
+          <p class="note">ตั้งค่า Token สำหรับห้องแชทแจ้งข่าวการจองตั๋วแยกจากห้องหลัก</p>
+          <label>LINE Access Token (ตารางก้อนคอนเสิร์ต)\n            <input type="password" id="lineAccessToken" placeholder="คีย์จากหน้าผู้พัฒนา LINE Developer">
+          </label>
+          <label>LINE Channel Secret\n            <input type="password" id="lineChannelSecret" placeholder="คีย์ลับผู้ให้บริการบอต">
+          </label>
+          <label>ข้อความเตรียมสรุป\n            <textarea id="lineMessage" rows="3" placeholder="ระบุเนื้อหาสำคัญในการจองส่งกลุ่ม"></textarea>
+          </label>
+          <div class="actions">
+            <button type="button" id="buildLineMessage">จัดข้อความด่วน</button>
+            <button type="button" id="markPaid">แจ้งเตือนเพื่อน: จ่ายเงินสำเร็จแล้ว</button>
+          </div>
+        </section>
+
+        <section class="panel full-width">
+          <div class="panelHead">
+            <h2>ตารางตั้งเวลาส่งข้อความอัตโนมัติ (Schedules)</h2>
+            <button type="button" class="ghost" id="refreshSchedules">Refresh</button>
+          </div>
+          <p class="note">ตั้งแจ้งเตือน LINE ก่อนขายบัตรอัตโนมัติ 1 วัน, 1 ชั่วโมง, 30 นาที, 15 นาที และ 5 นาที พร้อมแนบลิงก์ขายบัตร</p>
+          <div class="schedule-form-grid">
+            <label>LINE Target ID\n              <input id="scheduleTargetId" placeholder="userId U... หรือ groupId C...">
+          </label>
+            <label>ชื่อผู้จอง\n              <input id="scheduleBuyerName" placeholder="เช่น Pond">
+            </label>
+            <div class="actions" style="margin-top: 31px;">
+              <button type="button" id="createSchedule">ตั้ง Schedule จากข้อมูลหน้านี้</button>
+            </div>
+          </div>
+          <div class="statusLog" id="scheduleList"></div>
+          <p class="note">ถ้าจะให้คนใน LINE group ตั้ง schedule ได้ ให้ deploy เว็บนี้เป็น HTTPS แล้วตั้ง Webhook URL เป็น <code>/api/line-webhook</code></p>
+        </section>
+
+        <section class="panel full-width">
+          <div class="panelHead">
+            <h2>ข้อมูลผู้ซื้อ</h2>
+          </div>
+          <div class="copyGrid" id="buyerFields"></div>
+        </section>
+
+        <section class="panel full-width">
+          <h2>ข้อมูลบัตร</h2>
+          <p class="warning">เก็บเฉพาะเลขบัตรและวันหมดอายุแบบเข้ารหัสในเครื่อง ไม่เก็บ CVV และไม่กดยืนยันชำระเงินแทนคุณ</p>
+          <div class="copyGrid" id="cardFields"></div>
+        </section>
+
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
