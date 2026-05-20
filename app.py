@@ -176,53 +176,72 @@ def get_display_name(user_id, group_id=None):
 
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชันดึงจำนวนเงิน
-#    🔧 เพิ่มการเลือกตัวเลขที่มีค่ามากที่สุด (น่าจะเป็นยอดรวม)
-#    🔧 รองรับบิลที่ยอดรวมอยู่ด้านบนหรือด้านล่าง
+#    🔧 กรองเลขที่ยาวเกินไป (เลขบิล/เลขที่เอกสาร)
+#    🔧 หาตัวเลขที่อยู่ใกล้คำว่า total/รวม/ทั้งหมด
+#    🔧 จำกัดช่วงเงิน 1-10,000,000 บาท
+#    🔧 กรองความยาวตัวเลขไม่เกิน 8 หลัก
 # =================================================================
 def extract_amount(text):
-    """ดึงจำนวนเงินจากข้อความสลิป/บิล - เลือกค่ามากสุดที่เป็นไปได้"""
+    """ดึงจำนวนเงินจากข้อความสลิป/บิล - กรองเลขบิลและเลือกยอดรวม"""
     if not text:
         return None
     
-    # เช็คว่ามีคำที่เกี่ยวข้องกับบิลหรือไม่
-    bill_keywords = ['บาท', 'จำนวน', 'ยอดโอน', 'โอนเงิน', 'ธนาคาร', 'total', 'subtotal', 'รวม', 'ยอดรวม', 'ราคารวม']
+    # เช็คคำสำคัญว่ามีคำที่เกี่ยวข้องกับบิลหรือไม่
+    bill_keywords = ['บาท', 'จำนวน', 'ยอดโอน', 'โอนเงิน', 'total', 'subtotal', 'รวม', 'ยอดรวม', 'ราคารวม', 'ทั้งหมด', 'net']
     has_bill_keyword = any(keyword in text.lower() for keyword in bill_keywords)
     
     if not has_bill_keyword:
         logger.info("No bill keyword found, skipping")
         return None
     
-    # 1. หาจากคำนำหน้า Total / รวม / ยอดรวม (ลำดับความสำคัญสูงสุด)
+    # 1. หาจากคำนำหน้า (สำคัญที่สุด)
     patterns = [
-        r'(?:total|รวม|ยอดรวม|ราคารวม|net total)[:\s]*([\d,]+\.?\d*)',
+        r'(?:total|รวม|ทั้งหมด|ยอดรวม|ราคารวม|net total)[:\s]*([\d,]+\.?\d*)',
         r'(?:subtotal|ยอดรวมก่อนภาษี)[:\s]*([\d,]+\.?\d*)',
-        r'จำนวน:\s*([\d,]+\.?\d*)',
-        r'จำนวนเงิน:\s*([\d,]+\.?\d*)',
         r'ยอดโอน:\s*([\d,]+\.?\d*)',
+        r'จำนวนเงิน:\s*([\d,]+\.?\d*)',
         r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*บาท',
     ]
     
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            amount = float(match.group(1).replace(',', ''))
-            if amount >= 1:
-                return amount
+            amount_str = match.group(1).replace(',', '')
+            # กรองเลขที่ยาวเกินไป (น่าจะเป็นเลขบิล/เลขที่เอกสาร)
+            if len(amount_str) <= 10:  # เงินสูงสุดไม่เกิน 10 หลัก
+                try:
+                    amount = float(amount_str)
+                    if 1 <= amount <= 10000000:  # ระหว่าง 1 บาท ถึง 10 ล้านบาท
+                        return amount
+                except:
+                    pass
     
-    # 2. ถ้าหาไม่เจอ ให้เอาตัวเลขที่มีค่ามากที่สุด (น่าจะเป็นยอดรวม)
+    # 2. หาตัวเลขที่อยู่ใกล้คำว่า "total" หรือ "รวม" หรือ "ทั้งหมด" (ในย่อหน้าเดียวกัน)
+    lines = text.lower().split('\n')
+    for i, line in enumerate(lines):
+        if 'total' in line or 'รวม' in line or 'ทั้งหมด' in line or 'net' in line:
+            amounts = re.findall(r'(\d+(?:,\d{3})*(?:\.\d{2})?)', lines[i])
+            for a in amounts:
+                try:
+                    num = float(a.replace(',', ''))
+                    if 1 <= num <= 10000000 and len(str(int(num))) <= 8:
+                        return num
+                except:
+                    pass
+    
+    # 3. ถ้ายังไม่เจอ เอาตัวเลขที่มากที่สุดที่ไม่อยู่ในรูปแบบเลขบิล
     amounts = re.findall(r'\b(\d+(?:,\d{3})*(?:\.\d{2})?)\b', text)
     valid_amounts = []
     for a in amounts:
         try:
             num = float(a.replace(',', ''))
-            # กรองตัวเลขที่ไม่น่าใช่ (น้อยเกินไป หรือ 0)
-            if num >= 10:
+            # กรองเลขบิล (ยาวเกิน 8 หลัก หรือเป็นเลขที่/วันที่ หรือน้อยเกินไป)
+            if 10 <= num <= 10000000 and len(str(int(num))) <= 8:
                 valid_amounts.append(num)
         except:
             continue
     
     if valid_amounts:
-        # เอาค่าที่มากที่สุด (น่าจะเป็นยอดรวม)
         return max(valid_amounts)
     
     return None
@@ -492,7 +511,7 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
         
         logger.info(f"OCR Text detected (first 500 chars): {text_detected[:500] if text_detected else 'None'}")
         
-        # ใช้ extract_amount ดึงจำนวนเงิน (เลือกค่ามากสุดที่เป็นไปได้)
+        # ใช้ extract_amount ดึงจำนวนเงิน (กรองเลขบิลและเลือกยอดรวม)
         amount = extract_amount(text_detected)
         
         if amount:
