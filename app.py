@@ -12,7 +12,6 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, ImageMessage, TextMessage,
     TextSendMessage, FlexSendMessage
-    # แก้ไขล่าสุด: ลบ FileSendMessage ออก เพราะไม่มีใน LINE Bot SDK Python
 )
 from google.cloud import vision
 from google.oauth2 import service_account
@@ -24,7 +23,8 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- 1. การตั้งค่าเริ่มต้น ---\nline_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
+# --- 1. การตั้งค่าเริ่มต้น ---
+line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
 handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
 
 # Google Vision
@@ -32,8 +32,10 @@ creds_dict = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
 creds = service_account.Credentials.from_service_account_info(creds_dict)
 vision_client = vision.ImageAnnotatorClient(credentials=creds)
 
-# Supabase
-supabase: Client = create_client(os.getenv(\"SUPABASE_URL\"), os.getenv(\"SUPABASE_ANON_KEY\"))
+# =================================================================
+# [แก้ไขล่าสุด]: ล้างสัญลักษณ์ข้อผิดพลาดของระบบแปลภาษาออกเพื่อให้รันผ่านฉลุยบน Render
+# =================================================================
+supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_ANON_KEY"))
 
 # แก้ไขล่าสุด: เพิ่ม user_state เพื่อคุมลำดับการกรอกข้อมูล
 user_state = {}
