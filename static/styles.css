@@ -37,59 +37,54 @@ body {
   margin-bottom: 20px;
 }
 
-.hero > div:first-child,
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: 0 12px 30px rgba(21, 30, 43, 0.06);
-}
-
-.hero > div:first-child { padding: 28px; }
-
 .eyebrow {
-  margin: 0 0 8px;
-  color: var(--accent);
-  font-weight: 700;
   text-transform: uppercase;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--accent);
+  margin: 0 0 4px;
 }
 
-h1, h2 { margin: 0; letter-spacing: 0; }
-h1 { font-size: 34px; }
-h2 { font-size: 18px; }
+h1 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin: 0 0 8px;
+}
 
 .sub {
-  max-width: 680px;
-  margin: 12px 0 0;
+  font-size: 14px;
   color: var(--muted);
-  line-height: 1.6;
+  margin: 0;
+  line-height: 1.5;
 }
 
-/* ดีไซน์หน้าปัดตัวจับเวลาถอยหลังสีพื้นทึบสไตล์ดิจิทัล */
+/* กล่องดีไซน์แผงแสดงตัวเลขนาฬิกานับถอยหลัง */
 .timer {
-  padding: 28px;
-  display: grid;
-  align-content: center;
-  background: #0f1720;
+  background: var(--ink);
   color: #fff;
-  border: 1px solid #273447;
   border-radius: 8px;
-  box-shadow: 0 12px 30px rgba(21, 30, 43, 0.06);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
 }
 
-.timer span {
-  font-variant-numeric: tabular-nums;
-  font-size: clamp(30px, 5vw, 54px);
-  font-weight: 800;
+#countdown {
+  font-family: monospace;
+  font-size: 36px;
+  font-weight: 700;
 }
 
 .timer small {
-  color: #b8c2cc;
-  margin-top: 8px;
+  font-size: 12px;
+  color: #a6b1c2;
+  margin-top: 4px;
 }
 
-/* หน้าต่าง Grid สองคอลัมน์สมมาตรสำหรับประกบคู่แผ่นบอร์ดชั้นบนสุด */
+/* จัดกริดฟอร์มออกเป็นสองฝั่งซ้ายขวาอย่างสมดุล */
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -97,40 +92,15 @@ h2 { font-size: 18px; }
 }
 
 .panel {
-  padding: 20px;
-}
-
-.wide { grid-column: 1 / -1; }
-
-/* ควบคุมกลุ่มคอลัมน์ฝั่งขวาบน ให้โครงสร้างยืดส่วนสูงเต็มขอบเขตเพื่อบาลานซ์กับกล่อง Event ซ้ายมือ */
-.col-stack-right {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  align-self: stretch;
 }
 
-/* คลาสช่วยบีบกล่องแจ้งเตือนไม่ให้ยืดตัวเกินขนาดวัตถุภายใน */
-.content-fit {
-  align-self: flex-start;
-  width: 100%;
-}
-
-/* สั่งให้กล่องสถานะขยายตัวเพื่อรับช่วงพื้นที่แนวตั้งที่เหลือทั้งหมดของ Row แถวบน */
-.status-panel {
-  display: flex;
-  flex-direction: column;
-  flex-grow: 1;
-}
-
-/* ปรับเปลี่ยนกล่อง Log สรุปสถานะ 6 ข้อภายใน ให้ยืดปิดความยาวฐานล่างเต็มแผ่นฟอร์ม */
-.flex-grow-log {
-  flex-grow: 1;
-  min-height: 180px; 
-}
-
-/* สำหรับสั่งให้กล่องพาดขวางยาวสุดขอบจอสองคอลัมน์เต็ม (แถวล่าง) */
-.full-width {
+.panel.full-width {
   grid-column: span 2;
 }
 
@@ -138,125 +108,95 @@ h2 { font-size: 18px; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
 }
 
-label {
-  display: grid;
-  gap: 7px;
-  margin: 13px 0;
-  color: #344054;
-  font-size: 14px;
-  font-weight: 650;
-}
-
-input, select, textarea {
-  width: 100%;
-  border: 1px solid #cfd6df;
-  border-radius: 6px;
-  padding: 11px 12px;
-  color: var(--ink);
-  background: #fff;
-  font: inherit;
-}
-
-textarea { 
-  resize: vertical; 
-}
-
-/* ล็อกกรอบแจ้งเตือนไลน์ไม่ให้ดึงยืดเล่นได้ด้วยมือแต่เปลี่ยนให้ขยายตามตัวอักษรผ่าน JS */
-#lineMessage {
-  resize: none; 
-  overflow-y: hidden;
-  transition: height 0.1s ease-out;
-}
-
-.two {
-  display: grid;
-  grid-template-columns: 1fr 160px;
-  gap: 12px;
-}
-
-/* สไตล์โครงสร้างจัดระเบียบตารางฟอร์มสามคอลัมน์ในกล่องทำคิว Schedule */
-.schedule-form-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  align-items: start;
-}
-
-button {
-  border: 0;
-  border-radius: 6px;
-  padding: 11px 14px;
-  background: var(--accent);
-  color: #fff;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-button:hover { background: var(--accent-dark); }
-
-.secondary {
-  background: #263445;
-}
-
-.secondary:hover {
-  background: #182230;
-}
-
-.ghost {
-  background: var(--soft);
-  color: var(--accent-dark);
-}
-
-.ghost:hover {
-  background: #d2edf2;
-}
-
-.actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 14px;
+h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
 }
 
 .note {
+  font-size: 12px;
   color: var(--muted);
-  font-size: 13px;
+  margin: -10px 0 16px;
   line-height: 1.5;
 }
 
 .warning {
-  background: var(--warn-bg);
+  font-size: 12px;
   color: var(--warn);
-  border: 1px solid #f2d5a0;
+  background: var(--warn-bg);
+  padding: 10px 14px;
   border-radius: 6px;
-  padding: 10px 12px;
+  margin: -10px 0 16px;
   line-height: 1.5;
 }
 
-.checks {
-  display: grid;
-  gap: 10px;
-  margin-top: 14px;
+label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 14px;
+  gap: 6px;
 }
 
-.check {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 10px;
+input, select, textarea {
+  font-family: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  width: 100%;
 }
 
-.check input { width: 18px; margin-top: 2px; }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
-.vault {
+textarea { resize: vertical; }
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: auto;
+}
+
+/* ชุดดีไซน์ปุ่มสัมผัสมาตรฐานและลูกเล่นการเปลี่ยนสีปุ่ม */
+button {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--accent);
+}
+
+button.ghost:hover {
+  background: var(--soft);
+}
+
+.schedule-form-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 1fr 1fr auto;
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -305,34 +245,21 @@ button:hover { background: var(--accent-dark); }
 
 .toast {
   position: fixed;
-  right: 20px;
-  bottom: 20px;
-  max-width: min(420px, calc(100% - 40px));
-  padding: 13px 16px;
-  background: #111827;
+  right: 24px;
+  bottom: 24px;
+  background: var(--ink);
   color: #fff;
-  border-radius: 8px;
+  padding: 12px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  transform: translateY(100px);
   opacity: 0;
-  transform: translateY(12px);
-  transition: 0.2s ease;
-  pointer-events: none;
+  transition: transform 0.3s, opacity 0.3s;
 }
 
 .toast.show {
-  opacity: 1;
   transform: translateY(0);
-}
-
-/* สั่งปรับสเกลย้อนกลับมาเป็นแบบแถวเรียงเดี่ยว 1 คอลัมน์แนวตั้งทันทีเมื่อเปิดใช้งานผ่านมือถือ */
-@media (max-width: 820px) {
-  .hero, .grid, .copyGrid, .two, .vault, .schedule-form-grid {
-    grid-template-columns: 1fr;
-  }
-  .full-width {
-    grid-column: span 1;
-  }
-  .col-stack-right {
-    display: flex;
-    flex-direction: column;
-  }
+  opacity: 1;
 }
