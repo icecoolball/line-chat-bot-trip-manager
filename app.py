@@ -176,36 +176,51 @@ def get_display_name(user_id, group_id=None):
 
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชันดึงจำนวนเงินให้รองรับสลิปธนาคารไทย
+#    🔧 เพิ่มการกรองเฉพาะภาพที่มีคำว่า บาท หรือชื่อธนาคารเท่านั้น
+#    🔧 กรองจำนวนเงินต่ำกว่า 1 บาท (ไม่บันทึก)
 # =================================================================
 def extract_amount(text):
     """ดึงจำนวนเงินจากข้อความสลิป รองรับหลายรูปแบบของธนาคารไทย"""
     if not text:
         return None
     
+    # เช็คว่ามีคำว่า บาท หรือคำที่เกี่ยวข้องกับสลิปหรือไม่ (ป้องกันการอ่านรูปการ์ตูนผิด)
+    slip_keywords = ['บาท', 'จำนวน', 'ยอดโอน', 'โอนเงิน', 'ธนาคาร', 'kbank', 'scb', 'ธ.กสิกร', 'กสิกรไทย', 'กรุงไทย', 'กรุงเทพ', 'ทหารไทย', 'ttb', 'bay', 'อยุธยา']
+    has_slip_keyword = any(keyword in text.lower() for keyword in slip_keywords)
+    
+    if not has_slip_keyword:
+        logger.info("No slip keyword found, skipping")
+        return None  # ไม่ใช่สลิปจริง
+    
     # รูปแบบที่ 1: จำนวน: 45.00 บาท
     match = re.search(r'จำนวน:\s*([\d,]+\.?\d*)', text)
     if match:
-        return float(match.group(1).replace(',', ''))
+        amount = float(match.group(1).replace(',', ''))
+        return amount if amount >= 1 else None
     
     # รูปแบบที่ 2: จำนวนเงิน: 45.00
     match = re.search(r'จำนวนเงิน:\s*([\d,]+\.?\d*)', text)
     if match:
-        return float(match.group(1).replace(',', ''))
+        amount = float(match.group(1).replace(',', ''))
+        return amount if amount >= 1 else None
     
     # รูปแบบที่ 3: ยอดโอน: 45.00
     match = re.search(r'ยอดโอน:\s*([\d,]+\.?\d*)', text)
     if match:
-        return float(match.group(1).replace(',', ''))
+        amount = float(match.group(1).replace(',', ''))
+        return amount if amount >= 1 else None
     
     # รูปแบบที่ 4: 45.00 บาท
     match = re.search(r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*บาท', text)
     if match:
-        return float(match.group(1).replace(',', ''))
+        amount = float(match.group(1).replace(',', ''))
+        return amount if amount >= 1 else None
     
-    # รูปแบบที่ 5: ดึงตัวเลขท้ายสุดที่มี 2 จุดทศนิยม
-    amounts = re.findall(r'\b(\d+(?:,\d{3})*(?:\.\d{2}))\b', text)
-    if amounts:
-        return float(amounts[-1].replace(',', ''))
+    # รูปแบบที่ 5: โอนเงิน 45.00
+    match = re.search(r'โอนเงิน\s*([\d,]+\.?\d*)', text)
+    if match:
+        amount = float(match.group(1).replace(',', ''))
+        return amount if amount >= 1 else None
     
     return None
 
@@ -472,9 +487,9 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
         response = vision_client.text_detection(image=vision.Image(content=image_bytes))
         text_detected = response.text_annotations[0].description if response.text_annotations else ""
         
-        logger.info(f"OCR Text detected: {text_detected[:500]}")  # log ข้อความที่อ่านได้
+        logger.info(f"OCR Text detected (first 500 chars): {text_detected[:500] if text_detected else 'None'}")
         
-        # ใช้ extract_amount ดึงจำนวนเงิน
+        # ใช้ extract_amount ดึงจำนวนเงิน (จะกรองเฉพาะที่มีคำว่าบาท/ธนาคาร และเงิน >=1)
         amount = extract_amount(text_detected)
         
         if amount:
@@ -488,7 +503,7 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
             }).execute()
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึกสลิป {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"))
         else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในสลิป กรุณาบันทึกด้วยข้อความ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในสลิป หรือไม่ใช่สลิปการเงิน กรุณาบันทึกด้วยข้อความ"))
     except Exception as e:
         logger.error(f"Process slip error: {e}")
         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านสลิปได้ กรุณาลองใหม่"))
