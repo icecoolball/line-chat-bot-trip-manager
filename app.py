@@ -181,7 +181,6 @@ def get_server_time():
 # =================================================================
 def get_active_trip(event):
     user_id = event.source.user_id
-    # ตอนแรกให้ query แค่ creator_id ก่อน
     try:
         res = supabase.table("trips").select("*").eq("status", "active").eq("creator_id", user_id).execute()
         return res.data[0] if res.data else None
