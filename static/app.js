@@ -25,7 +25,7 @@ let offsetMs = 0;
 let saleTargetMs = null;
 let alarmed = false;
 
-// คง Comment เดิม: แปลงรูปแบบวันเวลาเป็น dd-mm-yyyy HH:MM:SS.msตามที่ผู้ใช้ต้องการ
+// คง Comment เดิม: แปลงรูปแบบวันเวลาเป็น dd-mm-yyyy HH:MM:SS.ms ตามที่ผู้ใช้ต้องการ
 function formatLocalDateTime(date) {
   const pad = (value, size = 2) => String(value).padStart(size, "0");
   return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
@@ -43,7 +43,6 @@ function showToast(msg) {
   setTimeout(() => toast.classList.remove("show"), 2500);
 }
 
-// คงโครงสร้างสคริปต์ลูปทำงานสร้างหน้าบ้านสำหรับปุ่มคัดลอกข้อมูล
 function renderCopyGrid(containerId, fields) {
   const container = $(containerId);
   if (!container) return;
@@ -81,24 +80,36 @@ function renderCopyGrid(containerId, fields) {
   });
 }
 
+// =================================================================
+// [อัปเดตล่าสุด 2026-05-20]: เพิ่ม round, zone, และ price เข้ามาใน PlainState เพื่อรักษาความจำและจัดเก็บลง LocalStorage ครบถ้วน
+// =================================================================
 function collectPlainState() {
   return {
     eventName: $("eventName")?.value || "",
     site: $("site")?.value || "Eventpop",
     ticketUrl: $("ticketUrl")?.value || "",
     saleTime: $("saleTime")?.value || "",
+    round: $("round")?.value || "",
+    zone: $("zone")?.value || "",
+    price: $("price")?.value || "",
     lineAccessToken: $("lineAccessToken")?.value || "",
     lineChannelSecret: $("lineChannelSecret")?.value || "",
     lineMessage: $("lineMessage")?.value || ""
   };
 }
 
+// =================================================================
+// [อัปเดตล่าสุด 2026-05-20]: คืนค่า round, zone, และ price กลับมาแสดงบนช่องฟอร์มเมื่อหน้าเว็บโหลดเสร็จ
+// =================================================================
 function applyPlainState(state) {
   if (!state) return;
   if ($("eventName")) $("eventName").value = state.eventName || "";
   if ($("site")) $("site").value = state.site || "Eventpop";
   if ($("ticketUrl")) $("ticketUrl").value = state.ticketUrl || "";
   if ($("saleTime")) $("saleTime").value = state.saleTime || "";
+  if ($("round")) $("round").value = state.round || "";
+  if ($("zone")) $("zone").value = state.zone || "";
+  if ($("price")) $("price").value = state.price || "";
   if ($("lineAccessToken")) $("lineAccessToken").value = state.lineAccessToken || "";
   if ($("lineChannelSecret")) $("lineChannelSecret").value = state.lineChannelSecret || "";
   if ($("lineMessage")) $("lineMessage").value = state.lineMessage || "";
