@@ -25,7 +25,11 @@ let offsetMs = 0;
 let saleTargetMs = null;
 let alarmed = false;
 
-// คง Comment เดิม: แปลงรูปแบบวันเวลาเป็น dd-mm-yyyy HH:MM:SS.ms ตามที่ผู้ใช้ต้องการ
+// แปลงรูปแบบวันเวลาสำหรับพิมพ์โชว์ประทับตราบันทึกในระบบ
+// =================================================================
+// [คง Comment เดิม]: แปลงรูปแบบวันเวลาเป็น dd-mm-yyyy HH:MM:SS.ms
+//    🔧 เปลี่ยนจาก yyyy-mm-dd เป็น dd-mm-yyyy ตามที่ผู้ใช้ต้องการ
+// =================================================================
 function formatLocalDateTime(date) {
   const pad = (value, size = 2) => String(value).padStart(size, "0");
   return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
@@ -81,7 +85,7 @@ function renderCopyGrid(containerId, fields) {
 }
 
 // =================================================================
-// [อัปเดตล่าสุด 2026-05-20]: เพิ่ม round, zone, และ price เข้ามาใน PlainState เพื่อรักษาความจำและจัดเก็บลง LocalStorage ครบถ้วน
+// [อัปเดตล่าสุด 2026-05-20]: เพิ่ม round, zone, และ price เข้าไปในฟังก์ชันรวบรวมข้อมูล PlainState เพื่อให้จัดเก็บค่าลงเครื่องได้ครบ
 // =================================================================
 function collectPlainState() {
   return {
@@ -99,7 +103,7 @@ function collectPlainState() {
 }
 
 // =================================================================
-// [อัปเดตล่าสุด 2026-05-20]: คืนค่า round, zone, และ price กลับมาแสดงบนช่องฟอร์มเมื่อหน้าเว็บโหลดเสร็จ
+// [อัปเดตล่าสุด 2026-05-20]: เพิ่มลอจิกเรียกคืนค่า round, zone, และ price กลับเข้าสู่ Input Element เมื่อทำการโหลดข้อมูลจาก LocalStorage
 // =================================================================
 function applyPlainState(state) {
   if (!state) return;
