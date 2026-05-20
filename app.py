@@ -184,7 +184,7 @@ def get_active_trip(event):
     user_id = event.source.user_id
     target_id = group_id if group_id else user_id
     try:
-        res = supabase.table("trips").select("*").eq("status", "active").or_(f"line_group_id.eq.{target_id},creator_id.eq.{target_id}").execute()
+        res = supabase.table("trips").select("*").eq("status", "active").or_(f"group_id.eq.{target_id},creator_id.eq.{target_id}").execute()
         return res.data[0] if res.data else None
     except Exception as e:
         logger.error(f"Get Active Trip Error: {e}")
