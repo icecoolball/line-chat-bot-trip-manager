@@ -5,10 +5,13 @@ import logging
 import threading
 import requests
 from datetime import datetime, timedelta
-from flask import Flask, request, abort, render_template, jsonify
+from flask import Flask, request, abort, render_template, send_from_directory, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import (
+    MessageEvent, ImageMessage, TextMessage,
+    TextSendMessage, FlexSendMessage
+)
 from google.cloud import vision
 from google.oauth2 import service_account
 from supabase import create_client, Client
@@ -214,7 +217,6 @@ def render_dashboard():
 
 @app.route("/static/<path:filename>")
 def serve_static(filename):
-    from flask import send_from_directory
     return send_from_directory("static", filename)
 
 # =================================================================
@@ -299,7 +301,6 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
-    from linebot.models import ImageMessage
     trip_data = get_active_trip(event)
     if not trip_data: return
     threading.Thread(target=process_slip, args=(event.message.id, trip_data["id"], event.source.user_id, getattr(event.source, 'group_id', None), event.reply_token)).start()
