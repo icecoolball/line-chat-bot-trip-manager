@@ -174,14 +174,39 @@ def get_display_name(user_id, group_id=None):
     except:
         return user_id[:8]
 
-def extract_amount_from_text(text):
-    """ดึงจำนวนเงินจากข้อความ"""
-    amounts = re.findall(r'(\d+(?:\.\d{2})?)', text)
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชันดึงจำนวนเงินให้รองรับสลิปธนาคารไทย
+# =================================================================
+def extract_amount(text):
+    """ดึงจำนวนเงินจากข้อความสลิป รองรับหลายรูปแบบของธนาคารไทย"""
+    if not text:
+        return None
+    
+    # รูปแบบที่ 1: จำนวน: 45.00 บาท
+    match = re.search(r'จำนวน:\s*([\d,]+\.?\d*)', text)
+    if match:
+        return float(match.group(1).replace(',', ''))
+    
+    # รูปแบบที่ 2: จำนวนเงิน: 45.00
+    match = re.search(r'จำนวนเงิน:\s*([\d,]+\.?\d*)', text)
+    if match:
+        return float(match.group(1).replace(',', ''))
+    
+    # รูปแบบที่ 3: ยอดโอน: 45.00
+    match = re.search(r'ยอดโอน:\s*([\d,]+\.?\d*)', text)
+    if match:
+        return float(match.group(1).replace(',', ''))
+    
+    # รูปแบบที่ 4: 45.00 บาท
+    match = re.search(r'(\d+(?:,\d{3})*(?:\.\d{2})?)\s*บาท', text)
+    if match:
+        return float(match.group(1).replace(',', ''))
+    
+    # รูปแบบที่ 5: ดึงตัวเลขท้ายสุดที่มี 2 จุดทศนิยม
+    amounts = re.findall(r'\b(\d+(?:,\d{3})*(?:\.\d{2}))\b', text)
     if amounts:
-        try:
-            return float(amounts[0])
-        except:
-            return None
+        return float(amounts[-1].replace(',', ''))
+    
     return None
 
 def parse_expense_text(text):
@@ -237,24 +262,17 @@ def callback():
         abort(400)
     return 'OK'
 
-# =================================================================
-# [อัปเดตล่าสุด 2026-05-21]: เพิ่ม log debug เพื่อตรวจสอบการทำงานของบอต
-# =================================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     text = event.message.text.strip().lower()
     user_id = event.source.user_id
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
-    
-    # เพิ่ม log debug
-    logger.info(f"=== DEBUG: Received text = '{text}', user = {user_id} ===")
 
     # =============================================================
     # 1. พิมพ์ id - แสดง User ID และ Group ID
     # =============================================================
     if text == "id":
-        logger.info("=== DEBUG: Entered ID condition ===")
         msg = f"🔑 [LINE ID Info]\n\n👤 User ID (ของคุณ):\n{user_id}"
         if group_id:
             msg += f"\n\n👥 Group ID:\n{group_id}"
@@ -320,7 +338,6 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         
-        # เก็บ state ไว้รอจำนวนคน
         user_state[user_id] = {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title']}
         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
         return
@@ -359,7 +376,6 @@ def handle_text(event):
             else:
                 msg += f"• {name}: เรียบร้อยแล้ว\n"
         
-        # ปิดทริป
         supabase.table("trips").update({"status": "closed"}).eq("id", trip_id).execute()
         del user_state[user_id]
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
@@ -368,7 +384,6 @@ def handle_text(event):
     # =============================================================
     # 7-8. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
     # =============================================================
-    # ตรวจสอบว่าเป็นคำพูดปกติ (ไม่ใช่คำสั่ง) และมีตัวเลข
     if not text.startswith(("ทริป", "trip", "ยอด", "sum", "จบทริป", "end", "id", "event", "stop")):
         trip = get_active_trip(user_id)
         if trip:
@@ -448,7 +463,7 @@ def handle_text(event):
         return
 
 # =============================================================
-# 5-6. รองรับรูปภาพสลิป
+# 5-6. รองรับรูปภาพสลิป - ปรับปรุงให้ใช้ extract_amount
 # =============================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token):
     try:
@@ -457,17 +472,10 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
         response = vision_client.text_detection(image=vision.Image(content=image_bytes))
         text_detected = response.text_annotations[0].description if response.text_annotations else ""
         
-        # หาจำนวนเงินจากสลิป
-        amounts = re.findall(r'(\d+(?:\.\d{2})?)', text_detected)
-        amount = None
-        for a in amounts:
-            try:
-                amt = float(a)
-                if amt > 0:
-                    amount = amt
-                    break
-            except:
-                continue
+        logger.info(f"OCR Text detected: {text_detected[:500]}")  # log ข้อความที่อ่านได้
+        
+        # ใช้ extract_amount ดึงจำนวนเงิน
+        amount = extract_amount(text_detected)
         
         if amount:
             sender_name = get_display_name(user_id, group_id)
