@@ -1,403 +1,478 @@
-const $ = (id) => document.getElementById(id);
+import os
+import re
+import json
+import logging
+import threading
+import requests
+from datetime import datetime
+from flask import Flask, request, abort, render_template, send_from_directory, jsonify
+from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import (
+    MessageEvent, ImageMessage, TextMessage,
+    TextSendMessage
+)
+from google.cloud import vision
+from google.oauth2 import service_account
+from supabase import create_client, Client
 
-// ข้อมูลจำลองโครงสร้างฟิลด์ฝั่งผู้ซื้อ
-const buyerFields = [
-  ["firstName", "ชื่อ"],
-  ["lastName", "นามสกุล"],
-  ["address", "ที่อยู่"],
-  ["subdistrict", "ตำบล"],
-  ["district", "อำเภอ"],
-  ["province", "จังหวัด"],
-  ["postalCode", "รหัสไปรษณีย์"],
-  ["phone", "เบอร์โทร"],
-  ["email", "อีเมล"]
-];
+app = Flask(__name__)
 
-// ข้อมูลจำลองโครงสร้างฟิลด์ฝั่งบัตรชำระเงิน
-const cardFields = [
-  ["cardNumber", "เลขบัตร", "password"],
-  ["cardExpiry", "ดด/ปป", "text"]
-];
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-let vault = {};
-let vaultKey = null; 
-let offsetMs = 0;
-let saleTargetMs = null;
-let alarmed = false;
+line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
+handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
 
-// =================================================================
-// [อัปเดตล่าสุด 2026-05-20]: แปลงรูปแบบวันเวลาเป็น dd-mm-yyyy HH:MM:SS.ms
-//    🔧 เปลี่ยนจาก yyyy-mm-dd เป็น dd-mm-yyyy ตามที่ผู้ใช้ต้องการ
-// =================================================================
-function formatLocalDateTime(date) {
-  const pad = (value, size = 2) => String(value).padStart(size, "0");
-  return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
-}
+creds_dict = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
+creds = service_account.Credentials.from_service_account_info(creds_dict)
+vision_client = vision.ImageAnnotatorClient(credentials=creds)
 
-function showToast(msg) {
-  let toast = document.querySelector(".toast");
-  if (!toast) {
-    toast = document.createElement("div");
-    toast.className = "toast";
-    document.body.appendChild(toast);
-  }
-  toast.textContent = msg;
-  toast.classList.add("show");
-  setTimeout(() => toast.classList.remove("show"), 2500);
-}
+supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_ANON_KEY"))
 
-function renderCopyGrid(containerId, fields) {
-  const container = $(containerId);
-  if (!container) return;
-  container.innerHTML = "";
+user_state = {}
+SCHEDULES_FILE = "schedules.local.json"
 
-  fields.forEach(([id, label, type = "text"]) => {
-    const row = document.createElement("div");
-    row.className = "copyRow";
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: โหลด schedules
+# =================================================================
+def load_schedules():
+    if os.path.exists(SCHEDULES_FILE):
+        with open(SCHEDULES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
 
-    const lbl = document.createElement("label");
-    lbl.textContent = label;
+def save_schedules(schedules):
+    with open(SCHEDULES_FILE, "w", encoding="utf-8") as f:
+        json.dump(schedules, f, ensure_ascii=False, indent=2)
 
-    const input = document.createElement("input");
-    input.id = id;
-    input.type = type;
-    input.autocomplete = "off";
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: API endpoints
+# =================================================================
+@app.route("/api/event-time", methods=["GET"])
+def get_event_time():
+    url = request.args.get("url", "")
+    if not url:
+        return jsonify({"ok": False, "error": "ไม่มี URL"}), 400
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=10)
+        html_text = resp.text
+        time_patterns = [
+            r'(\d{1,2})\s+(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+(\d{3,4})',
+            r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})',
+        ]
+        matched_text = ""
+        for pattern in time_patterns:
+            match = re.search(pattern, html_text, re.IGNORECASE)
+            if match:
+                matched_text = match.group(0)
+                break
+        return jsonify({"ok": True, "matchedText": matched_text})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
-    lbl.appendChild(input);
-    row.appendChild(lbl);
+@app.route("/api/line-push", methods=["POST"])
+def line_push():
+    data = request.json
+    target_id = data.get("targetId")
+    message = data.get("message")
+    if not target_id or not message:
+        return jsonify({"ok": False, "error": "ต้องระบุ targetId และ message"}), 400
+    try:
+        line_bot_api.push_message(target_id, TextSendMessage(text=message))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "ghost";
-    btn.textContent = "Copy";
-    btn.style.padding = "9px 12px";
-    btn.addEventListener("click", () => {
-      if (input.value) {
-        navigator.clipboard.writeText(input.value);
-        showToast(`คัดลอก ${label} แล้ว`);
-      }
-    });
+@app.route("/api/config-status", methods=["GET"])
+def config_status():
+    return jsonify({
+        "ok": True,
+        "lineTokenConfigured": bool(os.getenv('LINE_CHANNEL_ACCESS_TOKEN')),
+        "lineSecretConfigured": bool(os.getenv('LINE_CHANNEL_SECRET')),
+        "lineUserConfigured": False
+    })
 
-    row.appendChild(btn);
-    container.appendChild(row);
-  });
-}
+@app.route("/api/schedules", methods=["GET", "POST"])
+def handle_schedules():
+    if request.method == "GET":
+        return jsonify({"ok": True, "schedules": load_schedules()})
+    elif request.method == "POST":
+        try:
+            data = request.json
+            schedules = load_schedules()
+            new_id = str(len(schedules) + 1)
+            new_schedule = {
+                "id": new_id,
+                "targetId": data.get("targetId", ""),
+                "buyerName": data.get("buyerName", ""),
+                "name": data.get("name", ""),
+                "url": data.get("url", ""),
+                "saleTime": data.get("saleTime", ""),
+                "site": data.get("site", ""),
+                "reminders": [],
+                "active": True,
+                "createdAt": datetime.now().isoformat()
+            }
+            schedules.append(new_schedule)
+            save_schedules(schedules)
+            return jsonify({"ok": True, "schedule": new_schedule})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
 
-// =================================================================
-// [อัปเดตล่าสุด 2026-05-20]: เพิ่ม round, zone, และ price เข้าไปในฟังก์ชันรวบรวมข้อมูล PlainState เพื่อให้จัดเก็บค่าลงเครื่องได้ครบ
-// =================================================================
-function collectPlainState() {
-  return {
-    eventName: $("eventName")?.value || "",
-    site: $("site")?.value || "Eventpop",
-    ticketUrl: $("ticketUrl")?.value || "",
-    saleTime: $("saleTime")?.value || "",
-    round: $("round")?.value || "",
-    zone: $("zone")?.value || "",
-    price: $("price")?.value || "",
-    lineAccessToken: $("lineAccessToken")?.value || "",
-    lineChannelSecret: $("lineChannelSecret")?.value || "",
-    lineMessage: $("lineMessage")?.value || ""
-  };
-}
+@app.route("/api/schedules/<schedule_id>", methods=["DELETE"])
+def delete_schedule(schedule_id):
+    try:
+        schedules = load_schedules()
+        schedules = [s for s in schedules if s.get("id") != schedule_id]
+        save_schedules(schedules)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
-// =================================================================
-// [อัปเดตล่าสุด 2026-05-20]: เพิ่มลอจิกเรียกคืนค่า round, zone, และ price กลับเข้าสู่ Input Element เมื่อทำการโหลดข้อมูลจาก LocalStorage
-// =================================================================
-function applyPlainState(state) {
-  if (!state) return;
-  if ($("eventName")) $("eventName").value = state.eventName || "";
-  if ($("site")) $("site").value = state.site || "Eventpop";
-  if ($("ticketUrl")) $("ticketUrl").value = state.ticketUrl || "";
-  if ($("saleTime")) $("saleTime").value = state.saleTime || "";
-  if ($("round")) $("round").value = state.round || "";
-  if ($("zone")) $("zone").value = state.zone || "";
-  if ($("price")) $("price").value = state.price || "";
-  if ($("lineAccessToken")) $("lineAccessToken").value = state.lineAccessToken || "";
-  if ($("lineChannelSecret")) $("lineChannelSecret").value = state.lineChannelSecret || "";
-  if ($("lineMessage")) $("lineMessage").value = state.lineMessage || "";
-  updateSaleTarget();
-}
+@app.route("/api/server-time", methods=["GET"])
+def get_server_time():
+    import time
+    return jsonify({"ok": True, "serverTime": int(time.time() * 1000)})
 
-function updateSaleTarget() {
-  const val = $("saleTime")?.value;
-  if (val) {
-    saleTargetMs = new Date(val).getTime();
-    alarmed = false;
-  } else {
-    saleTargetMs = null;
-  }
-}
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: ฟังก์ชันหลักของบอต
+# =================================================================
 
-function autoResizeTextarea(el) {
-  el.style.height = "auto";
-  el.style.height = el.scrollHeight + "px";
-}
+def get_active_trip(user_id):
+    """ดึงทริปที่กำลังทำงานอยู่ของ user"""
+    try:
+        res = supabase.table("trips").select("*").eq("status", "active").eq("creator_id", user_id).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.error(f"Get Active Trip Error: {e}")
+        return None
 
-async function syncServerTime() {
-  try {
-    const start = Date.now();
-    const res = await fetch("/api/server-time");
-    const json = await res.json();
-    if (json.ok) {
-      const end = Date.now();
-      const latency = (end - start) / 2;
-      const actualServerTime = json.serverTime + latency;
-      offsetMs = actualServerTime - end;
-      console.log("Server time synced. Offset:", offsetMs, "ms");
-    }
-  } catch (e) {
-    console.error("Failed to sync server time:", e);
-  }
-}
+def get_display_name(user_id, group_id=None):
+    try:
+        if group_id:
+            profile = line_bot_api.get_group_member_profile(group_id, user_id)
+        else:
+            profile = line_bot_api.get_profile(user_id)
+        return profile.display_name
+    except:
+        return user_id[:8]
 
-function startClock() {
-  const countdownEl = $("countdown");
-  const statusEl = $("timeStatus");
+def extract_amount_from_text(text):
+    """ดึงจำนวนเงินจากข้อความ"""
+    amounts = re.findall(r'(\d+(?:\.\d{2})?)', text)
+    if amounts:
+        try:
+            return float(amounts[0])
+        except:
+            return None
+    return None
 
-  function update() {
-    const now = Date.now() + offsetMs;
-    const nowStr = formatLocalDateTime(new Date(now));
+def parse_expense_text(text):
+    """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'"""
+    parts = text.split()
+    if len(parts) >= 3:
+        amount_match = re.search(r'(\d+(?:\.\d{2})?)', text)
+        if amount_match:
+            amount = float(amount_match.group(1))
+            name = parts[0]
+            item = ' '.join(parts[1:-1]) if len(parts) > 2 else "ค่าใช้จ่าย"
+            return name, item, amount
+    return None, None, None
 
-    if (!saleTargetMs) {
-      if (countdownEl) countdownEl.textContent = "--:--:--.---";
-      if (statusEl) statusEl.textContent = `เวลาปัจจุบัน (เซิร์ฟเวอร์): ${nowStr}`;
-      requestAnimationFrame(update);
-      return;
-    }
+def get_total_expenses(trip_id):
+    """คำนวณยอดรวมและแยกตาม user"""
+    try:
+        res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
+        expenses = res.data
+        if not expenses:
+            return 0, {}
+        total = sum(e['amount'] for e in expenses)
+        user_totals = {}
+        for e in expenses:
+            uid = e['line_user_id']
+            user_totals[uid] = user_totals.get(uid, 0) + e['amount']
+        return total, user_totals
+    except Exception as e:
+        logger.error(f"Get total expenses error: {e}")
+        return 0, {}
 
-    const diff = saleTargetMs - now;
-    if (statusEl) {
-      statusEl.textContent = `เปิดขาย: ${formatLocalDateTime(new Date(saleTargetMs))} | ปัจจุบัน: ${nowStr}`;
-    }
+def get_active_events():
+    """ดึง event ที่กำลัง active จาก schedules"""
+    schedules = load_schedules()
+    active = [s for s in schedules if s.get('active', True)]
+    return active
 
-    if (diff <= 0) {
-      if (countdownEl) countdownEl.textContent = "00:00:00.000";
-      if (!alarmed) {
-        alarmed = true;
-        showToast("📢 ถึงเวลาเปิดขายบัตรแล้ว!");
-      }
-      requestAnimationFrame(update);
-      return;
-    }
+@app.route("/")
+def render_dashboard():
+    return render_template("index.html")
 
-    const ms = diff % 1000;
-    const secs = Math.floor(diff / 1000) % 60;
-    const mins = Math.floor(diff / 60000) % 60;
-    const hours = Math.floor(diff / 3600000);
+@app.route("/static/<path:filename>")
+def serve_static(filename):
+    return send_from_directory("static", filename)
 
-    const pad = (n, z = 2) => String(n).padStart(z, "0");
-    if (countdownEl) {
-      countdownEl.textContent = `${pad(hours)}:${pad(mins)}:${pad(secs)}.${pad(ms, 3)}`;
-    }
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers['X-Line-Signature']
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
 
-    requestAnimationFrame(update);
-  }
-  requestAnimationFrame(update);
-}
+@handler.add(MessageEvent, message=TextMessage)
+def handle_text(event):
+    text = event.message.text.strip().lower()
+    user_id = event.source.user_id
+    group_id = getattr(event.source, 'group_id', None)
+    reply_token = event.reply_token
 
-function initVault() {
-  const savedVault = localStorage.getItem("ticketVault");
-  if (savedVault) {
-    try {
-      vault = JSON.parse(savedVault);
-      buyerFields.forEach(([id]) => {
-        if (vault[id] && $(id)) $(id).value = vault[id];
-      });
-      cardFields.forEach(([id]) => {
-        if (vault[id] && $(id)) $(id).value = vault[id];
-      });
-    } catch (e) {
-      console.error(e);
-    }
-  }
-}
+    # =============================================================
+    # 1. พิมพ์ id - แสดง User ID และ Group ID
+    # =============================================================
+    if text == "id":
+        msg = f"🔑 [LINE ID Info]\n\n👤 User ID (ของคุณ):\n{user_id}"
+        if group_id:
+            msg += f"\n\n👥 Group ID:\n{group_id}"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
 
-function saveVault() {
-  buyerFields.forEach(([id]) => {
-    if ($(id)) vault[id] = $(id).value;
-  });
-  cardFields.forEach(([id]) => {
-    if ($(id)) vault[id] = $(id).value;
-  });
-  localStorage.setItem("ticketVault", JSON.stringify(vault));
-}
+    # =============================================================
+    # 2. พิมพ์ ทริป หรือ trip + ชื่อ - สร้างทริปใหม่
+    # =============================================================
+    if text.startswith("ทริป ") or text.startswith("trip "):
+        # ตัดคำนำหน้าออก
+        if text.startswith("ทริป "):
+            trip_name = text[4:].strip()
+        else:
+            trip_name = text[5:].strip()
+        
+        if not trip_name:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป เช่น 'ทริป mujirock'"))
+            return
+        
+        try:
+            # ปิดทริปเก่า
+            supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
+            # สร้างทริปใหม่
+            supabase.table("trips").insert({
+                "title": trip_name,
+                "status": "active",
+                "line_group_id": group_id,
+                "creator_id": user_id
+            }).execute()
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
+        except Exception as e:
+            logger.error(f"Create trip error: {e}")
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ สร้างทริปไม่สำเร็จ กรุณาลองใหม่"))
+        return
 
-function detectSaleTimeFromText() {
-  const msg = $("lineMessage")?.value;
-  if (!msg) return;
-  const regex = /(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})\s+(\d{1,2}):(\d{2})/;
-  const match = msg.match(regex);
-  if (match) {
-    let day = parseInt(match[1]);
-    let month = parseInt(match[2]) - 1;
-    let year = parseInt(match[3]);
-    let hour = parseInt(match[4]);
-    let min = parseInt(match[5]);
-    if (year < 2500) year += 543; 
-    const date = new Date(year - 543, month, day, hour, min, 0);
-    const localStr = date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0") + "T" + String(date.getHours()).padStart(2, "0") + ":" + String(date.getMinutes()).padStart(2, "0") + ":00";
-    if ($("saleTime")) {
-      $("saleTime").value = localStr;
-      updateSaleTarget();
-      localStorage.setItem("ticketPrepState", JSON.stringify(collectPlainState()));
-      showToast("แกะวันเวลาเปิดขายสำเร็จ");
-    }
-  } else {
-    showToast("ไม่พบรูปแบบวันเวลาในข้อความ (เช่น 25/12/2026 10:00)");
-  }
-}
+    # =============================================================
+    # 3. พิมพ์ ยอด หรือ sum - แสดงยอดรวมล่าสุด
+    # =============================================================
+    if text in ["ยอด", "sum"]:
+        trip = get_active_trip(user_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่ พิมพ์ 'ทริป ชื่อทริป' เพื่อเริ่มทริป"))
+            return
+        
+        total, user_totals = get_total_expenses(trip['id'])
+        if total == 0:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"💵 ยอดสรุปสุทธิ: 0.00 บาท\n\nยังไม่มีรายการค่าใช้จ่าย"))
+            return
+        
+        msg = f"💵 ยอดสรุปสุทธิ: {total:,.2f} บาท\n"
+        for uid, amt in user_totals.items():
+            name = get_display_name(uid, group_id)
+            msg += f"• {name}: {amt:,.2f} บาท\n"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
 
-function setLineSummaryMessage() {
-  const name = $("eventName")?.value || "";
-  const url = $("ticketUrl")?.value || "";
-  const site = $("site")?.value || "";
-  const timeVal = $("saleTime")?.value;
-  let timeStr = "";
-  if (timeVal) {
-    timeStr = formatLocalDateTime(new Date(timeVal));
-  }
-  const msg = `📌 [สรุปเตรียมตัวกดบัตร]\n🎯 Event: ${name}\n🌐 เว็บไซต์: ${site}\n📅 เวลาเปิดขาย: ${timeStr}\n🔗 ลิงก์กดบัตร: ${url}`;
-  if ($("lineMessage")) {
-    $("lineMessage").value = msg;
-    autoResizeTextarea($("lineMessage"));
-    localStorage.setItem("ticketPrepState", JSON.stringify(collectPlainState()));
-  }
-}
+    # =============================================================
+    # 4. พิมพ์ จบทริป หรือ end trip - ปิดทริปและคำนวณหาร
+    # =============================================================
+    if text in ["จบทริป", "end trip"]:
+        trip = get_active_trip(user_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+        
+        # เก็บ state ไว้รอจำนวนคน
+        user_state[user_id] = {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title']}
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
+        return
 
-async function sendLine() {
-  const token = $("lineAccessToken")?.value;
-  const msg = $("lineMessage")?.value;
-  if (!token || !msg) {
-    showToast("กรุณากรอก Token และ ข้อความ");
-    return;
-  }
-  showToast("กำลังส่งทดสอบ...");
-}
+    # =============================================================
+    # 4.1 รับจำนวนคนหลังจากจบทริป
+    # =============================================================
+    if user_id in user_state and user_state[user_id].get("action") == "end_trip":
+        try:
+            num_people = int(text)
+            if num_people <= 0:
+                raise ValueError
+        except:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
+            return
+        
+        trip_id = user_state[user_id]["trip_id"]
+        trip_title = user_state[user_id]["trip_title"]
+        total, user_totals = get_total_expenses(trip_id)
+        
+        if total == 0:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
+            del user_state[user_id]
+            return
+        
+        avg = total / num_people
+        msg = f"🚀 ทริป: {trip_title}\n📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n👥 จำนวนคน: {num_people}\n\n💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
+        
+        for uid, amt in user_totals.items():
+            name = get_display_name(uid, None)
+            diff = amt - avg
+            if diff > 0:
+                msg += f"• {name}: จ่ายเพิ่ม {diff:,.2f} บาท\n"
+            elif diff < 0:
+                msg += f"• {name}: รับคืน {abs(diff):,.2f} บาท\n"
+            else:
+                msg += f"• {name}: เรียบร้อยแล้ว\n"
+        
+        # ปิดทริป
+        supabase.table("trips").update({"status": "closed"}).eq("id", trip_id).execute()
+        del user_state[user_id]
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
 
-async function markPaid() {
-  showToast("ส่งแจ้งเตือนชำระเงินสำเร็จแล้ว...");
-}
+    # =============================================================
+    # 7-8. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
+    # =============================================================
+    # ตรวจสอบว่าเป็นคำพูดปกติ (ไม่ใช่คำสั่ง) และมีตัวเลข
+    if not text.startswith(("ทริป", "trip", "ยอด", "sum", "จบทริป", "end", "id", "event", "stop")):
+        trip = get_active_trip(user_id)
+        if trip:
+            name, item, amount = parse_expense_text(event.message.text.strip())
+            if amount and amount > 0:
+                try:
+                    sender_name = get_display_name(user_id, group_id)
+                    supabase.table("expenses").insert({
+                        "trip_id": trip['id'],
+                        "line_user_id": user_id,
+                        "amount": amount,
+                        "item_name": item or "ค่าใช้จ่าย",
+                        "slip_url": None
+                    }).execute()
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึกยอด {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"))
+                except Exception as e:
+                    logger.error(f"Save expense error: {e}")
+                return
 
-async function loadSchedules() {
-  try {
-    const res = await fetch("/api/schedules");
-    const arr = await res.json();
-    updateScheduleListUI(arr);
-  } catch (e) {
-    console.error(e);
-  }
-}
+    # =============================================================
+    # 9. พิมพ์ event - แสดง event ปัจจุบัน
+    # =============================================================
+    if text == "event":
+        events = get_active_events()
+        base_url = "https://line-chat-bot-trip-manager.onrender.com"
+        
+        if not events:
+            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่ (หรือทุกงานหมดอายุ/ถูกปิดแล้ว)\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n" + base_url
+        else:
+            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\n"
+            for i, e in enumerate(events, 1):
+                msg += f"{i}. งาน: {e.get('name', '-')}\n⏰ เวลาขาย: {e.get('saleTime', '-')}\n🔗 ลิงก์งาน: {e.get('url', '-')}\n-----------------------\n"
+            msg += f"\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
+        
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
 
-async function createScheduleFromPage() {
-  const targetId = $("scheduleTargetId")?.value;
-  const buyerName = $("scheduleBuyerName")?.value;
-  if (!targetId || !buyerName) {
-    showToast("กรุณาระบุ Target ID และ ชื่อผู้ซื้อ");
-    return;
-  }
-  showToast("ตั้งกำหนดการสำเร็จ");
-}
+    # =============================================================
+    # 10. พิมพ์ stop event - แสดงรายการให้เลือกหยุด
+    # =============================================================
+    if text == "stop event":
+        events = get_active_events()
+        if not events:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี Event ที่กำลังทำงานอยู่"))
+            return
+        
+        user_state[user_id] = {"action": "stop_event", "events": events}
+        msg = "🚫 เลือกหมายเลข Event ที่คุณต้องการสั่งหยุดทำงาน (Stop):\n=======================\n"
+        for i, e in enumerate(events, 1):
+            msg += f"{i}. งาน: {e.get('name', '-')}\n🛑 (ID ย่อ: {e.get('id', '-')})\n-----------------------\n"
+        msg += "👉 พิมพ์เฉพาะ [ตัวเลขลำดับ] เพื่อระบุเลือกปิดงานชิ้นนั้นได้เลยครับ"
+        
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
 
-function updateScheduleListUI(arr) {
-  const list = $("scheduleList");
-  if (!list) return;
-  if (!arr || arr.length === 0) {
-    list.innerHTML = `<div style="color:var(--muted); text-align:center; padding:20px;">ไม่มีตารางการแจ้งเตือนที่ตั้งไว้</div>`;
-    return;
-  }
-  list.innerHTML = arr.map(item => `
-    <div class="scheduleItem">
-      <strong>📌 ${item.buyerName}</strong> - ห้องแชท: <code>${item.targetId}</code><br>
-      <small>เปิดขายเวลา: ${item.saleTime}</small>
-    </div>
-  `).join("");
-}
+    # =============================================================
+    # 10.1 รับเลข event ที่เลือกหยุด
+    # =============================================================
+    if user_id in user_state and user_state[user_id].get("action") == "stop_event":
+        try:
+            choice = int(text) - 1
+            events = user_state[user_id]["events"]
+            if 0 <= choice < len(events):
+                selected = events[choice]
+                schedules = load_schedules()
+                for s in schedules:
+                    if s.get('id') == selected.get('id'):
+                        s['active'] = False
+                        break
+                save_schedules(schedules)
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
+            else:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง กรุณาลองใหม่"))
+        except:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์หมายเลขเท่านั้น"))
+        del user_state[user_id]
+        return
 
-function updateStatusLogView() {
-  const name = $("eventName")?.value || "ยังไม่ได้ระบุ";
-  const site = $("site")?.value || "Eventpop";
-  const url = $("ticketUrl")?.value || "ไม่มีลิงก์";
-  const list = $("scheduleList");
-  if (list && list.children.length === 0) {
-    list.innerHTML = `<div style="color:var(--muted); text-align:center; padding:10px;">📊 รอการตรวจสอบความพร้อม: โปรเจกต์ ${name} บนหน้า ${site} (${url})</div>`;
-  }
-}
+# =============================================================
+# 5-6. รองรับรูปภาพสลิป
+# =============================================================
+def process_slip(message_id, trip_id, user_id, group_id, reply_token):
+    try:
+        message_content = line_bot_api.get_message_content(message_id)
+        image_bytes = b''.join(message_content.iter_content())
+        response = vision_client.text_detection(image=vision.Image(content=image_bytes))
+        text_detected = response.text_annotations[0].description if response.text_annotations else ""
+        
+        # หาจำนวนเงินจากสลิป
+        amounts = re.findall(r'(\d+(?:\.\d{2})?)', text_detected)
+        amount = None
+        for a in amounts:
+            try:
+                amt = float(a)
+                if amt > 0:
+                    amount = amt
+                    break
+            except:
+                continue
+        
+        if amount:
+            sender_name = get_display_name(user_id, group_id)
+            supabase.table("expenses").insert({
+                "trip_id": trip_id,
+                "line_user_id": user_id,
+                "amount": amount,
+                "slip_url": f"slip_{message_id}",
+                "item_name": f"สลิป (โดย {sender_name})"
+            }).execute()
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึกสลิป {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในสลิป กรุณาบันทึกด้วยข้อความ"))
+    except Exception as e:
+        logger.error(f"Process slip error: {e}")
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านสลิปได้ กรุณาลองใหม่"))
 
-document.addEventListener("DOMContentLoaded", () => {
-  renderCopyGrid("buyerFields", buyerFields);
-  renderCopyGrid("cardFields", cardFields);
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_image(event):
+    user_id = event.source.user_id
+    trip = get_active_trip(user_id)
+    if not trip:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่ พิมพ์ 'ทริป ชื่อทริป' เพื่อเริ่มทริป"))
+        return
+    threading.Thread(target=process_slip, args=(event.message.id, trip['id'], user_id, getattr(event.source, 'group_id', None), event.reply_token)).start()
 
-  const savedState = localStorage.getItem("ticketPrepState");
-  if (savedState) {
-    try {
-      applyPlainState(JSON.parse(savedState));
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  initVault();
-  syncServerTime();
-  startClock();
-  loadSchedules();
-
-  setInterval(syncServerTime, 60000);
-
-  const saveAllBtn = $("saveAll");
-  const detectSaleTimeBtn = $("detectSaleTime");
-  const sendLineBtn = $("sendLine");
-  const buildLineMessageBtn = $("buildLineMessage");
-  const markPaidBtn = $("markPaid");
-  const saleTimeEl = $("saleTime");
-  const createScheduleBtn = $("createSchedule");
-  const refreshSchedulesBtn = $("refreshSchedules");
-  const lineMessageEl = $("lineMessage");
-
-  if (saveAllBtn) {
-    saveAllBtn.addEventListener("click", () => {
-      localStorage.setItem("ticketPrepState", JSON.stringify(collectPlainState()));
-      saveVault();
-      showToast("บันทึกข้อมูลทั้งหมดลงเครื่องแล้ว");
-    });
-  }
-
-  if (detectSaleTimeBtn) detectSaleTimeBtn.addEventListener("click", detectSaleTimeFromText);
-  if (sendLineBtn) sendLineBtn.addEventListener("click", sendLine);
-  if (buildLineMessageBtn) buildLineMessageBtn.addEventListener("click", setLineSummaryMessage);
-  if (markPaidBtn) markPaidBtn.addEventListener("click", markPaid);
-  if (saleTimeEl) saleTimeEl.addEventListener("change", updateSaleTarget);
-  if (createScheduleBtn) createScheduleBtn.addEventListener("click", createScheduleFromPage);
-  if (refreshSchedulesBtn) refreshSchedulesBtn.addEventListener("click", loadSchedules);
-
-  document.querySelectorAll("input, textarea, select").forEach((input) => {
-    input.addEventListener("input", () => {
-      localStorage.setItem("ticketPrepState", JSON.stringify(collectPlainState()));
-      updateStatusLogView();
-    });
-    input.addEventListener("change", () => {
-      localStorage.setItem("ticketPrepState", JSON.stringify(collectPlainState()));
-      updateStatusLogView();
-    });
-  });
-
-  const buyerInputs = document.querySelectorAll("#buyerFields input");
-  const cardInputs = document.querySelectorAll("#cardFields input");
-  buyerInputs.forEach((input) => {
-    input.addEventListener("change", saveVault);
-  });
-  cardInputs.forEach((input) => {
-    input.addEventListener("change", saveVault);
-  });
-
-  if (lineMessageEl) {
-    lineMessageEl.addEventListener("input", function() {
-      autoResizeTextarea(this);
-    });
-  }
-
-  setTimeout(() => {
-    if (lineMessageEl) autoResizeTextarea(lineMessageEl);
-    updateStatusLogView();
-  }, 100);
-});
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5177))
+    app.run(host="0.0.0.0", port=port, debug=True)
