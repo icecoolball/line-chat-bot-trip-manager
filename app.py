@@ -175,10 +175,13 @@ def get_display_name(user_id, group_id=None):
         return user_id[:8]
 
 def get_all_expenses(trip_id):
-    """ดึงรายการค่าใช้จ่ายทั้งหมดของทริป"""
+    """ดึงรายการค่าใช้จ่ายทั้งหมดของทริป และเรียงตามยอดเงินจากน้อยไปมาก"""
     try:
         res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
-        return res.data if res.data else []
+        expenses = res.data if res.data else []
+        # เรียงตาม amount จากน้อยไปมาก
+        expenses.sort(key=lambda x: x['amount'])
+        return expenses
     except Exception as e:
         logger.error(f"Get all expenses error: {e}")
         return []
@@ -203,6 +206,7 @@ def send_menu(reply_token):
         QuickReplyButton(action=MessageAction(label="📅 Event", text="event")),
         QuickReplyButton(action=MessageAction(label="🛑 Stop Event", text="stop event")),
         QuickReplyButton(action=MessageAction(label="❓ เมนู", text="เมนู")),
+        QuickReplyButton(action=MessageAction(label="❌ ยกเลิก", text="ยกเลิก")),
     ])
     
     msg = "📋 **รายการคำสั่งทั้งหมด**\n\n"
@@ -210,14 +214,14 @@ def send_menu(reply_token):
     msg += "🚀 **ทริป [ชื่อ]** - สร้างทริปใหม่\n"
     msg += "💰 **ยอด** - แสดงยอดรวมค่าใช้จ่าย\n"
     msg += "🏁 **จบทริป** - ปิดทริปและคำนวณหาร\n"
-    msg += "✏️ **edit [ID]** - แก้ไขยอดเงินตาม ID ในฐานข้อมูล\n"
-    msg += "✏️ **edit [ID] [จำนวน]** - แก้ไขเป็นจำนวนเงินทันที\n"
+    msg += "✏️ **edit** - แก้ไขยอดเงิน (แสดงรายการเรียงตามยอดน้อยไปมาก)\n"
+    msg += "✏️ **edit [ID] [จำนวน]** - แก้ไขทันที เช่น edit 42 500\n"
     msg += "📅 **event** - แสดง Event ที่ตั้งค่าไว้\n"
     msg += "🛑 **stop event** - หยุดการแจ้งเตือน Event\n"
     msg += "📸 **ส่งรูปสลิป/บิล** - OCR อ่านยอดอัตโนมัติ\n"
-    msg += "✏️ **พิมพ์ข้อความ** เช่น 'บอล ค่าเบียร์ 2000' - บันทึกค่าใช้จ่าย\n\n"
-    msg += "💡 **คำแนะนำ**: ถ้ายอดไม่ถูกต้อง พิมพ์ 'edit' ดูรายการทั้งหมด (แสดง ID จริง)\n"
-    msg += "💡 **ยกเลิก**: พิมพ์ 'ยกเลิก' เพื่อออกจากโหมดแก้ไข"
+    msg += "✏️ **พิมพ์ข้อความ** เช่น 'บอล ค่าเบียร์ 2000' - บันทึกค่าใช้จ่าย\n"
+    msg += "❌ **ยกเลิก** - ออกจากโหมดแก้ไข\n\n"
+    msg += "💡 **คำแนะนำ**: รายการจะเรียงตามยอดเงินจากน้อยไปมาก"
     
     line_bot_api.reply_message(
         reply_token,
@@ -351,15 +355,15 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 1. ยกเลิกโหมดแก้ไข
+    # 1. ยกเลิกโหมดแก้ไข (รองรับทั้ง ยกเลิก และ cancel)
     # =============================================================
-    if text == "ยกเลิก" and user_id in user_state:
+    if text in ["ยกเลิก", "cancel"] and user_id in user_state:
         del user_state[user_id]
         line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมดแก้ไขเรียบร้อย"))
         return
 
     # =============================================================
-    # 2. จัดการแก้ไขยอด (edit) - แสดง ID จริงในฐานข้อมูล
+    # 2. จัดการแก้ไขยอด (edit) - แสดง ID จริง เรียงตามยอดจากน้อยไปมาก
     # =============================================================
     if text.startswith("edit"):
         trip = get_active_trip(user_id)
@@ -367,7 +371,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         
-        expenses = get_all_expenses(trip['id'])
+        expenses = get_all_expenses(trip['id'])  # เรียงตาม amount แล้ว
         if not expenses:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีรายการค่าใช้จ่ายให้แก้ไข"))
             return
@@ -376,7 +380,7 @@ def handle_text(event):
         if user_id in user_state:
             del user_state[user_id]
         
-        # สร้างข้อความแสดงรายการทั้งหมด (แสดง ID จริงจากฐานข้อมูล)
+        # สร้างข้อความแสดงรายการทั้งหมด (เรียงตามยอดจากน้อยไปมาก)
         msg = "✏️ เลือกรายการที่ต้องการแก้ไขยอดเงิน (พิมพ์ ID):\n"
         msg += "=======================\n"
         for exp in expenses:
@@ -387,7 +391,7 @@ def handle_text(event):
         msg += "\n=======================\n"
         msg += "👉 พิมพ์ 'edit 42' เพื่อแก้ไขรายการ ID 42\n"
         msg += "👉 พิมพ์ 'edit 42 500' เพื่อเปลี่ยน ID 42 เป็น 500 บาท\n"
-        msg += "👉 พิมพ์ 'ยกเลิก' เพื่อออกจากโหมดแก้ไข"
+        msg += "👉 พิมพ์ 'ยกเลิก' หรือ 'cancel' เพื่อออกจากโหมดแก้ไข"
         
         user_state[user_id] = {"action": "edit_selection", "expenses": expenses}
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
@@ -412,7 +416,7 @@ def handle_text(event):
                         "old_amount": selected['amount']
                     }
                     line_bot_api.reply_message(reply_token, TextSendMessage(
-                        text=f"✏️ แก้ไขรายการ ID {selected['id']}: {selected['item_name'][:50]}\n💰 ยอดเดิม: {selected['amount']:,.2f} บาท\n\n👉 พิมพ์จำนวนเงินใหม่ (เช่น 500)\n👉 พิมพ์ 'ยกเลิก' เพื่อออก"
+                        text=f"✏️ แก้ไขรายการ ID {selected['id']}: {selected['item_name'][:50]}\n💰 ยอดเดิม: {selected['amount']:,.2f} บาท\n\n👉 พิมพ์จำนวนเงินใหม่ (เช่น 500)\n👉 พิมพ์ 'ยกเลิก' หรือ 'cancel' เพื่อออก"
                     ))
                 else:
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ ไม่พบรายการ ID {expense_id}"))
@@ -573,7 +577,7 @@ def handle_text(event):
     # =============================================================
     # 7. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
     # =============================================================
-    if not text.startswith(("ทริป", "trip", "ยอด", "sum", "จบทริป", "end", "id", "event", "stop", "edit", "เมนู", "menu", "ยกเลิก")):
+    if not text.startswith(("ทริป", "trip", "ยอด", "sum", "จบทริป", "end", "id", "event", "stop", "edit", "เมนู", "menu", "ยกเลิก", "cancel")):
         trip = get_active_trip(user_id)
         if trip:
             name, item, amount = parse_expense_text(event.message.text.strip())
