@@ -210,12 +210,13 @@ def send_menu(reply_token):
     msg += "🚀 **ทริป [ชื่อ]** - สร้างทริปใหม่\n"
     msg += "💰 **ยอด** - แสดงยอดรวมค่าใช้จ่าย\n"
     msg += "🏁 **จบทริป** - ปิดทริปและคำนวณหาร\n"
-    msg += "✏️ **edit** - แก้ไขยอดเงิน (เลือกทีละรายการ)\n"
+    msg += "✏️ **edit [ID]** - แก้ไขยอดเงินตาม ID ในฐานข้อมูล\n"
+    msg += "✏️ **edit [ID] [จำนวน]** - แก้ไขเป็นจำนวนเงินทันที\n"
     msg += "📅 **event** - แสดง Event ที่ตั้งค่าไว้\n"
     msg += "🛑 **stop event** - หยุดการแจ้งเตือน Event\n"
     msg += "📸 **ส่งรูปสลิป/บิล** - OCR อ่านยอดอัตโนมัติ\n"
     msg += "✏️ **พิมพ์ข้อความ** เช่น 'บอล ค่าเบียร์ 2000' - บันทึกค่าใช้จ่าย\n\n"
-    msg += "💡 **คำแนะนำ**: ถ้ายอดไม่ถูกต้อง พิมพ์ 'edit' แล้วเลือกแก้ไขภายหลัง\n"
+    msg += "💡 **คำแนะนำ**: ถ้ายอดไม่ถูกต้อง พิมพ์ 'edit' ดูรายการทั้งหมด (แสดง ID จริง)\n"
     msg += "💡 **ยกเลิก**: พิมพ์ 'ยกเลิก' เพื่อออกจากโหมดแก้ไข"
     
     line_bot_api.reply_message(
@@ -358,7 +359,7 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 2. จัดการแก้ไขยอด (edit) - แสดงรายการทั้งหมด
+    # 2. จัดการแก้ไขยอด (edit) - แสดง ID จริงในฐานข้อมูล
     # =============================================================
     if text.startswith("edit"):
         trip = get_active_trip(user_id)
@@ -375,33 +376,35 @@ def handle_text(event):
         if user_id in user_state:
             del user_state[user_id]
         
-        # สร้างข้อความแสดงรายการทั้งหมด (ไม่จำกัด 10 รายการ)
-        msg = "✏️ เลือกรายการที่ต้องการแก้ไขยอดเงิน (พิมพ์หมายเลข):\n"
+        # สร้างข้อความแสดงรายการทั้งหมด (แสดง ID จริงจากฐานข้อมูล)
+        msg = "✏️ เลือกรายการที่ต้องการแก้ไขยอดเงิน (พิมพ์ ID):\n"
         msg += "=======================\n"
-        for i, exp in enumerate(expenses, 1):
+        for exp in expenses:
             # ตัดชื่อรายการให้สั้นลงเหลือ 35 ตัวอักษร
             short_name = exp['item_name'][:35] if len(exp['item_name']) > 35 else exp['item_name']
-            msg += f"{i}. {short_name}\n   💰 {exp['amount']:,.2f} บาท\n"
+            msg += f"ID {exp['id']}. {short_name}\n   💰 {exp['amount']:,.2f} บาท\n"
         
         msg += "\n=======================\n"
-        msg += "👉 พิมพ์ 'edit 1' เพื่อแก้ไขรายการที่ 1\n"
-        msg += "👉 พิมพ์ 'edit 1 500' เพื่อเปลี่ยนรายการที่ 1 เป็น 500 บาท\n"
+        msg += "👉 พิมพ์ 'edit 42' เพื่อแก้ไขรายการ ID 42\n"
+        msg += "👉 พิมพ์ 'edit 42 500' เพื่อเปลี่ยน ID 42 เป็น 500 บาท\n"
         msg += "👉 พิมพ์ 'ยกเลิก' เพื่อออกจากโหมดแก้ไข"
         
         user_state[user_id] = {"action": "edit_selection", "expenses": expenses}
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
-    # รับการเลือกแก้ไข
+    # รับการเลือกแก้ไข (ใช้ ID จริง)
     if user_id in user_state and user_state[user_id].get("action") == "edit_selection":
         expenses = user_state[user_id]["expenses"]
         parts = text.split()
         
         try:
             if len(parts) == 1:
-                idx = int(parts[0]) - 1
-                if 0 <= idx < len(expenses):
-                    selected = expenses[idx]
+                # ค้นหา expense จาก ID ที่ผู้ใช้พิมพ์
+                expense_id = int(parts[0])
+                selected = next((e for e in expenses if e['id'] == expense_id), None)
+                
+                if selected:
                     user_state[user_id] = {
                         "action": "edit_amount",
                         "expense_id": selected['id'],
@@ -409,29 +412,30 @@ def handle_text(event):
                         "old_amount": selected['amount']
                     }
                     line_bot_api.reply_message(reply_token, TextSendMessage(
-                        text=f"✏️ แก้ไขรายการ: {selected['item_name'][:50]}\n💰 ยอดเดิม: {selected['amount']:,.2f} บาท\n\n👉 พิมพ์จำนวนเงินใหม่ (เช่น 500)\n👉 พิมพ์ 'ยกเลิก' เพื่อออก"
+                        text=f"✏️ แก้ไขรายการ ID {selected['id']}: {selected['item_name'][:50]}\n💰 ยอดเดิม: {selected['amount']:,.2f} บาท\n\n👉 พิมพ์จำนวนเงินใหม่ (เช่น 500)\n👉 พิมพ์ 'ยกเลิก' เพื่อออก"
                     ))
                 else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง"))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ ไม่พบรายการ ID {expense_id}"))
                     del user_state[user_id]
             
             elif len(parts) >= 2:
-                idx = int(parts[0]) - 1
+                expense_id = int(parts[0])
                 new_amount = float(parts[1].replace(',', ''))
-                if 0 <= idx < len(expenses) and new_amount > 0:
-                    selected = expenses[idx]
+                selected = next((e for e in expenses if e['id'] == expense_id), None)
+                
+                if selected and new_amount > 0:
                     if update_expense_amount(selected['id'], new_amount):
                         line_bot_api.reply_message(reply_token, TextSendMessage(
-                            text=f"✅ แก้ไขรายการ {selected['item_name'][:30]} จาก {selected['amount']:,.2f} บาท เป็น {new_amount:,.2f} บาท เรียบร้อย!"
+                            text=f"✅ แก้ไขรายการ ID {selected['id']} ({selected['item_name'][:30]}) จาก {selected['amount']:,.2f} บาท เป็น {new_amount:,.2f} บาท เรียบร้อย!"
                         ))
                     else:
                         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ แก้ไขไม่สำเร็จ"))
                     del user_state[user_id]
                 else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขหรือจำนวนเงินไม่ถูกต้อง"))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ ไม่พบ ID {expense_id} หรือจำนวนเงินไม่ถูกต้อง"))
                     del user_state[user_id]
         except (ValueError, IndexError):
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุหมายเลขรายการและจำนวนเงินให้ถูกต้อง"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุ ID และจำนวนเงินให้ถูกต้อง (เช่น edit 42 500)"))
             del user_state[user_id]
         return
     
@@ -447,7 +451,7 @@ def handle_text(event):
             
             if update_expense_amount(expense_id, new_amount):
                 line_bot_api.reply_message(reply_token, TextSendMessage(
-                    text=f"✅ แก้ไขรายการ {expense_item[:30]} จาก {old_amount:,.2f} บาท เป็น {new_amount:,.2f} บาท เรียบร้อย!"
+                    text=f"✅ แก้ไขรายการ ID {expense_id} ({expense_item[:30]}) จาก {old_amount:,.2f} บาท เป็น {new_amount:,.2f} บาท เรียบร้อย!"
                 ))
             else:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ แก้ไขไม่สำเร็จ"))
@@ -663,7 +667,6 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
         
         if amount:
             sender_name = get_display_name(user_id, group_id)
-            # ใช้ timestamp ป้องกันชื่อซ้ำ
             timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
             item_name = f"บิล {timestamp} (โดย {sender_name})"
             
@@ -675,11 +678,15 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
                 "item_name": item_name
             }).execute()
             
+            # ดึง ID ของรายการที่เพิ่งเพิ่ม
+            new_id = result.data[0]['id'] if result.data else None
+            
             success_msg = f"✅ บันทึกจำนวนเงิน {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"
             
-            # ดึงจำนวนรายการทั้งหมด
-            expenses = get_all_expenses(trip_id)
-            success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit {len(expenses)}"
+            if new_id:
+                success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit {new_id} {amount}"
+            else:
+                success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit แล้วเลือก ID ที่ต้องการ"
             
             line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
         else:
