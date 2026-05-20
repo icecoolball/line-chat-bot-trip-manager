@@ -226,6 +226,7 @@ def callback():
 def handle_text(event):
     text = event.message.text.strip().lower()
     user_id = event.source.user_id
+	logger.info(f"Received text: '{text}' from user: {user_id}")
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
 
