@@ -175,12 +175,12 @@ def get_display_name(user_id, group_id=None):
         return user_id[:8]
 
 def get_all_expenses(trip_id):
-    """ดึงรายการค่าใช้จ่ายทั้งหมดของทริป และเรียงตามยอดเงินจากน้อยไปมาก"""
+    """ดึงรายการค่าใช้จ่ายทั้งหมดของทริป และเรียงตาม ID จากน้อยไปมาก"""
     try:
         res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
         expenses = res.data if res.data else []
-        # เรียงตาม amount จากน้อยไปมาก
-        expenses.sort(key=lambda x: x['amount'])
+        # เรียงตาม id จากน้อยไปมาก (id เรียงตามเวลาที่เพิ่ม)
+        expenses.sort(key=lambda x: x['id'])
         return expenses
     except Exception as e:
         logger.error(f"Get all expenses error: {e}")
@@ -386,7 +386,7 @@ def handle_text(event):
         # สร้างข้อความแสดงรายการทั้งหมด (เรียงตามยอดจากน้อยไปมาก) - แสดง ID 4 หลัก
         msg = "✏️ เลือกรายการที่ต้องการแก้ไขยอดเงิน (พิมพ์ ID 4 หลัก):\n"
         msg += "=======================\n"
-        for exp in expenses:
+        for exp in expenses:  # ไม่ต้อง sort ซ้ำ เพราะ sort มาแล้ว
             # ตัดชื่อรายการให้สั้นลงเหลือ 35 ตัวอักษร
             short_name = exp['item_name'][:35] if len(exp['item_name']) > 35 else exp['item_name']
             # แสดง ID เป็น 4 หลัก (เติม 0 ข้างหน้า)
