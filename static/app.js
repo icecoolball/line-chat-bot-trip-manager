@@ -25,11 +25,7 @@ let offsetMs = 0;
 let saleTargetMs = null;
 let alarmed = false;
 
-// แปลงรูปแบบวันเวลาสำหรับพิมพ์โชว์ประทับตราบันทึกในระบบ
-// =================================================================
-// [คง Comment เดิม]: แปลงรูปแบบวันเวลาเป็น dd-mm-yyyy HH:MM:SS.ms
-//    🔧 เปลี่ยนจาก yyyy-mm-dd เป็น dd-mm-yyyy ตามที่ผู้ใช้ต้องการ
-// =================================================================
+// คง Comment เดิม: แปลงรูปแบบวันเวลาเป็น dd-mm-yyyy HH:MM:SS.msตามที่ผู้ใช้ต้องการ
 function formatLocalDateTime(date) {
   const pad = (value, size = 2) => String(value).padStart(size, "0");
   return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
@@ -47,7 +43,7 @@ function showToast(msg) {
   setTimeout(() => toast.classList.remove("show"), 2500);
 }
 
-// สร้างปุ่มคัดลอกข้อความด่วนลงช่องกริดแผงควบคุมหน้าบ้าน
+// คงโครงสร้างสคริปต์ลูปทำงานสร้างหน้าบ้านสำหรับปุ่มคัดลอกข้อมูล
 function renderCopyGrid(containerId, fields) {
   const container = $(containerId);
   if (!container) return;
@@ -119,13 +115,11 @@ function updateSaleTarget() {
   }
 }
 
-// ปรับขนาดหน้าต่างกรอกข้อความสรุป LINE อัตโนมัติ
 function autoResizeTextarea(el) {
   el.style.height = "auto";
   el.style.height = el.scrollHeight + "px";
 }
 
-// ลิงก์ดึงเวลามาตรฐานจากเครื่องเซิร์ฟเวอร์หลังบ้านป้องกันเครื่องเบี้ยว
 async function syncServerTime() {
   try {
     const start = Date.now();
@@ -143,7 +137,6 @@ async function syncServerTime() {
   }
 }
 
-// ลูปคำนวณเวลานาฬิกานับถอยหลังประสิทธิภาพสูง
 function startClock() {
   const countdownEl = $("countdown");
   const statusEl = $("timeStatus");
@@ -189,7 +182,6 @@ function startClock() {
   requestAnimationFrame(update);
 }
 
-// ฟังก์ชันคุมการบันทึกประวัติรหัสผ่านและความปลอดภัยระดับ Local
 function initVault() {
   const savedVault = localStorage.getItem("ticketVault");
   if (savedVault) {
@@ -217,7 +209,6 @@ function saveVault() {
   localStorage.setItem("ticketVault", JSON.stringify(vault));
 }
 
-// ระบบแกะข้อมูลวันเวลาจากแชทข้อความบอตคลังเดิม
 function detectSaleTimeFromText() {
   const msg = $("lineMessage")?.value;
   if (!msg) return;
@@ -262,7 +253,6 @@ function setLineSummaryMessage() {
 
 async function sendLine() {
   const token = $("lineAccessToken")?.value;
-  const secret = $("lineChannelSecret")?.value;
   const msg = $("lineMessage")?.value;
   if (!token || !msg) {
     showToast("กรุณากรอก Token และ ข้อความ");
@@ -320,7 +310,6 @@ function updateStatusLogView() {
   }
 }
 
-// สั่งงานระบบทำงานทันทีเมื่อหน้าจอโหลดพร้อม
 document.addEventListener("DOMContentLoaded", () => {
   renderCopyGrid("buyerFields", buyerFields);
   renderCopyGrid("cardFields", cardFields);

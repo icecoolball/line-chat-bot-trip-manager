@@ -201,21 +201,22 @@ button.ghost:hover {
   margin-bottom: 14px;
 }
 
-/* คุมการเรียงการ์ดช่อง Copy ข้อมูลผู้ซื้อเป็นแบบตาราง 3 คอลัมน์พิกเซลเด่นชัด */
+/* แก้ไขล่าสุด: ปรับความกว้างกล่อง Grid คัดลอกด่วน 3 คอลัมน์ให้ล็อกขนาดยืดหยุ่นสวยงามตามรูปภาพ */
 .copyGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 16px;
 }
 
+/* แก้ไขล่าสุด: ปรับแต่งให้ตำแหน่งของฟิลด์และปุ่ม Copy ระนาบตรงขอบท้ายพอดีกัน */
 .copyRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-  align-items: end;
+  align-items: flex-end;
 }
 
-.copyRow label { margin: 0; }
+.copyRow label { margin: 0; width: 100%; }
 
 /* ดีไซน์พื้นหลังแผ่นกระดาษกล่องกรอบข้อความ Log สรุป */
 .statusLog {
