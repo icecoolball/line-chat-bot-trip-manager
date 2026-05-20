@@ -4,13 +4,13 @@ import json
 import logging
 import threading
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask, request, abort, render_template, send_from_directory, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, ImageMessage, TextMessage,
-    TextSendMessage, FlexSendMessage
+    TextSendMessage
 )
 from google.cloud import vision
 from google.oauth2 import service_account
@@ -57,36 +57,21 @@ def get_event_time():
     url = request.args.get("url", "")
     if not url:
         return jsonify({"ok": False, "error": "ไม่มี URL"}), 400
-    
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
+        headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        
-        # ดึงข้อความจากหน้าเว็บ
         html_text = resp.text
-        
-        # พยายามหาเวลาจาก meta tags หรือข้อความ
         time_patterns = [
             r'(\d{1,2})\s+(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+(\d{3,4})',
             r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})',
-            r'(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})',
         ]
-        
         matched_text = ""
         for pattern in time_patterns:
             match = re.search(pattern, html_text, re.IGNORECASE)
             if match:
                 matched_text = match.group(0)
                 break
-        
-        return jsonify({
-            "ok": True,
-            "isoLocal": "",
-            "matchedText": matched_text
-        })
+        return jsonify({"ok": True, "matchedText": matched_text})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -98,15 +83,12 @@ def line_push():
     data = request.json
     target_id = data.get("targetId")
     message = data.get("message")
-    
     if not target_id or not message:
         return jsonify({"ok": False, "error": "ต้องระบุ targetId และ message"}), 400
-    
     try:
         line_bot_api.push_message(target_id, TextSendMessage(text=message))
         return jsonify({"ok": True})
     except Exception as e:
-        logger.error(f"LINE push error: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 # =================================================================
@@ -118,7 +100,7 @@ def config_status():
         "ok": True,
         "lineTokenConfigured": bool(os.getenv('LINE_CHANNEL_ACCESS_TOKEN')),
         "lineSecretConfigured": bool(os.getenv('LINE_CHANNEL_SECRET')),
-        "lineUserConfigured": False  # ต้องให้ user ใส่เอง
+        "lineUserConfigured": False
     })
 
 # =================================================================
@@ -127,31 +109,24 @@ def config_status():
 @app.route("/api/schedules", methods=["GET", "POST"])
 def handle_schedules():
     if request.method == "GET":
-        schedules = load_schedules()
-        return jsonify({"ok": True, "schedules": schedules})
-    
+        return jsonify({"ok": True, "schedules": load_schedules()})
     elif request.method == "POST":
         try:
             data = request.json
             schedules = load_schedules()
-            
-            # สร้าง ID ใหม่
             new_id = str(len(schedules) + 1)
             new_schedule = {
                 "id": new_id,
                 "targetId": data.get("targetId", ""),
                 "buyerName": data.get("buyerName", ""),
-                "seatCount": data.get("seatCount", ""),
-                "zone": data.get("zone", ""),
                 "name": data.get("name", ""),
                 "url": data.get("url", ""),
-                "totalPrice": data.get("totalPrice", ""),
                 "saleTime": data.get("saleTime", ""),
                 "site": data.get("site", ""),
                 "reminders": [],
+                "active": True,
                 "createdAt": datetime.now().isoformat()
             }
-            
             schedules.append(new_schedule)
             save_schedules(schedules)
             return jsonify({"ok": True, "schedule": new_schedule})
@@ -177,10 +152,11 @@ def get_server_time():
     return jsonify({"ok": True, "serverTime": int(time.time() * 1000)})
 
 # =================================================================
-# [คงเดิม]: ฟังก์ชันบอตจัดการทริป
+# [อัปเดตล่าสุด 2026-05-21]: ฟังก์ชันหลักของบอต
 # =================================================================
-def get_active_trip(event):
-    user_id = event.source.user_id
+
+def get_active_trip(user_id):
+    """ดึงทริปที่กำลังทำงานอยู่ของ user"""
     try:
         res = supabase.table("trips").select("*").eq("status", "active").eq("creator_id", user_id).execute()
         return res.data[0] if res.data else None
@@ -195,20 +171,54 @@ def get_display_name(user_id, group_id=None):
         else:
             profile = line_bot_api.get_profile(user_id)
         return profile.display_name
-    except Exception as e:
-        logger.error(f"Get Profile Error: {e}")
+    except:
         return user_id[:8]
 
-def extract_amount(text):
-    clean_text = text.replace(',', '')
-    match = re.search(r'(?:โอนเงินสำเร็จ|จำนวนเงิน|ยอดโอน|Amount)[:\s]*([\d.]+)', clean_text, re.IGNORECASE)
-    if match: return float(match.group(1))
-    amounts = [float(x) for x in re.findall(r'\b\d+\.\d{2}\b', clean_text)]
-    return max(amounts) if amounts else None
+def extract_amount_from_text(text):
+    """ดึงจำนวนเงินจากข้อความ"""
+    amounts = re.findall(r'(\d+(?:\.\d{2})?)', text)
+    if amounts:
+        try:
+            return float(amounts[0])
+        except:
+            return None
+    return None
 
-# =================================================================
-# [คงเดิม]: เส้นทางหลัก
-# =================================================================
+def parse_expense_text(text):
+    """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'"""
+    parts = text.split()
+    if len(parts) >= 3:
+        amount_match = re.search(r'(\d+(?:\.\d{2})?)', text)
+        if amount_match:
+            amount = float(amount_match.group(1))
+            name = parts[0]
+            item = ' '.join(parts[1:-1]) if len(parts) > 2 else "ค่าใช้จ่าย"
+            return name, item, amount
+    return None, None, None
+
+def get_total_expenses(trip_id):
+    """คำนวณยอดรวมและแยกตาม user"""
+    try:
+        res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
+        expenses = res.data
+        if not expenses:
+            return 0, {}
+        total = sum(e['amount'] for e in expenses)
+        user_totals = {}
+        for e in expenses:
+            uid = e['line_user_id']
+            user_totals[uid] = user_totals.get(uid, 0) + e['amount']
+        return total, user_totals
+    except Exception as e:
+        logger.error(f"Get total expenses error: {e}")
+        return 0, {}
+
+def get_active_events():
+    """ดึง event ที่กำลัง active จาก schedules"""
+    schedules = load_schedules()
+    active = [s for s in schedules if s.get('active', True)]
+    return active
+
 @app.route("/")
 def render_dashboard():
     return render_template("index.html")
@@ -217,91 +227,272 @@ def render_dashboard():
 def serve_static(filename):
     return send_from_directory("static", filename)
 
-# =================================================================
-# [คงเดิม]: LINE Webhook
-# =================================================================
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
-    logger.info("Request body: " + body)
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
     return 'OK'
 
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: เพิ่ม log debug เพื่อตรวจสอบการทำงานของบอต
+# =================================================================
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
-    text = event.message.text.strip()
+    text = event.message.text.strip().lower()
     user_id = event.source.user_id
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
+    
+    # เพิ่ม log debug
+    logger.info(f"=== DEBUG: Received text = '{text}', user = {user_id} ===")
 
-    if text.startswith("สร้างทริป "):
-        trip_name = text.replace("สร้างทริป ", "").strip()
-        target_id = group_id if group_id else user_id
-        try:
-            supabase.table("trips").update({"status": "closed"}).or_(f"line_group_id.eq.{target_id},creator_id.eq.{target_id}").execute()
-            supabase.table("trips").insert({
-                "title": trip_name, "status": "active",
-                "line_group_id": group_id if group_id else None, "creator_id": user_id
-            }).execute()
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 สร้างทริป \"{trip_name}\" สำเร็จแล้ว! พร้อมบันทึกสลิปและเงินหารในกลุ่มนี้ทันที"))
-        except Exception as e:
-            logger.error(f"Create Trip Error: {e}")
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาดในระบบฐานข้อมูล ไม่สามารถสร้างทริปได้"))
+    # =============================================================
+    # 1. พิมพ์ id - แสดง User ID และ Group ID
+    # =============================================================
+    if text == "id":
+        logger.info("=== DEBUG: Entered ID condition ===")
+        msg = f"🔑 [LINE ID Info]\n\n👤 User ID (ของคุณ):\n{user_id}"
+        if group_id:
+            msg += f"\n\n👥 Group ID:\n{group_id}"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
-    trip_data = get_active_trip(event)
-    if not trip_data: return
-
-    if text == "สรุปค่าใช้จ่าย":
+    # =============================================================
+    # 2. พิมพ์ ทริป หรือ trip + ชื่อ - สร้างทริปใหม่
+    # =============================================================
+    if text.startswith("ทริป ") or text.startswith("trip "):
+        if text.startswith("ทริป "):
+            trip_name = text[4:].strip()
+        else:
+            trip_name = text[5:].strip()
+        
+        if not trip_name:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป เช่น 'ทริป mujirock'"))
+            return
+        
         try:
-            import pandas as pd
-            res = supabase.table("expenses").select("*").eq("trip_id", trip_data["id"]).execute()
-            df = pd.DataFrame(res.data)
-            if df.empty:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ยังไม่มีค่าใช้จ่ายบันทึกในทริปนี้"))
-                return
-            df['display_name'] = df['line_user_id'].apply(lambda uid: get_display_name(uid, group_id))
-            summary_df = df.groupby('display_name')['amount'].sum().reset_index()
-            total_amount = df['amount'].sum()
-            num_people = df['line_user_id'].nunique()
-            per_person = total_amount / num_people if num_people > 0 else 0
-            msg = f"📊 สรุปประวัติค่าใช้จ่ายทริป: {trip_data['title']}\n"
-            for _, row in summary_df.iterrows():
-                msg += f"• {row['display_name']}: {row['amount']:,.2f} บาท\n"
-            msg += f"\n💰 ยอดรวมทั้งหมด: {total_amount:,.2f} บาท\n👥 สมาชิกทั้งหมด: {num_people} คน\n📉 เฉลี่ยคนละ: {per_person:,.2f} บาท"
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+            # ปิดทริปเก่า
+            supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
+            # สร้างทริปใหม่
+            supabase.table("trips").insert({
+                "title": trip_name,
+                "status": "active",
+                "line_group_id": group_id,
+                "creator_id": user_id
+            }).execute()
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
         except Exception as e:
-            logger.error(f"Summary Error: {e}")
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดความล้มเหลวในการประมวลผล สรุปยอดเงินล้มเหลว"))
+            logger.error(f"Create trip error: {e}")
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ สร้างทริปไม่สำเร็จ กรุณาลองใหม่"))
+        return
 
+    # =============================================================
+    # 3. พิมพ์ ยอด หรือ sum - แสดงยอดรวมล่าสุด
+    # =============================================================
+    if text in ["ยอด", "sum"]:
+        trip = get_active_trip(user_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่ พิมพ์ 'ทริป ชื่อทริป' เพื่อเริ่มทริป"))
+            return
+        
+        total, user_totals = get_total_expenses(trip['id'])
+        if total == 0:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"💵 ยอดสรุปสุทธิ: 0.00 บาท\n\nยังไม่มีรายการค่าใช้จ่าย"))
+            return
+        
+        msg = f"💵 ยอดสรุปสุทธิ: {total:,.2f} บาท\n"
+        for uid, amt in user_totals.items():
+            name = get_display_name(uid, group_id)
+            msg += f"• {name}: {amt:,.2f} บาท\n"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
+    # =============================================================
+    # 4. พิมพ์ จบทริป หรือ end trip - ปิดทริปและคำนวณหาร
+    # =============================================================
+    if text in ["จบทริป", "end trip"]:
+        trip = get_active_trip(user_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+        
+        # เก็บ state ไว้รอจำนวนคน
+        user_state[user_id] = {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title']}
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
+        return
+
+    # =============================================================
+    # 4.1 รับจำนวนคนหลังจากจบทริป
+    # =============================================================
+    if user_id in user_state and user_state[user_id].get("action") == "end_trip":
+        try:
+            num_people = int(text)
+            if num_people <= 0:
+                raise ValueError
+        except:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
+            return
+        
+        trip_id = user_state[user_id]["trip_id"]
+        trip_title = user_state[user_id]["trip_title"]
+        total, user_totals = get_total_expenses(trip_id)
+        
+        if total == 0:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
+            del user_state[user_id]
+            return
+        
+        avg = total / num_people
+        msg = f"🚀 ทริป: {trip_title}\n📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n👥 จำนวนคน: {num_people}\n\n💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
+        
+        for uid, amt in user_totals.items():
+            name = get_display_name(uid, None)
+            diff = amt - avg
+            if diff > 0:
+                msg += f"• {name}: จ่ายเพิ่ม {diff:,.2f} บาท\n"
+            elif diff < 0:
+                msg += f"• {name}: รับคืน {abs(diff):,.2f} บาท\n"
+            else:
+                msg += f"• {name}: เรียบร้อยแล้ว\n"
+        
+        # ปิดทริป
+        supabase.table("trips").update({"status": "closed"}).eq("id", trip_id).execute()
+        del user_state[user_id]
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
+    # =============================================================
+    # 7-8. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
+    # =============================================================
+    # ตรวจสอบว่าเป็นคำพูดปกติ (ไม่ใช่คำสั่ง) และมีตัวเลข
+    if not text.startswith(("ทริป", "trip", "ยอด", "sum", "จบทริป", "end", "id", "event", "stop")):
+        trip = get_active_trip(user_id)
+        if trip:
+            name, item, amount = parse_expense_text(event.message.text.strip())
+            if amount and amount > 0:
+                try:
+                    sender_name = get_display_name(user_id, group_id)
+                    supabase.table("expenses").insert({
+                        "trip_id": trip['id'],
+                        "line_user_id": user_id,
+                        "amount": amount,
+                        "item_name": item or "ค่าใช้จ่าย",
+                        "slip_url": None
+                    }).execute()
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึกยอด {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"))
+                except Exception as e:
+                    logger.error(f"Save expense error: {e}")
+                return
+
+    # =============================================================
+    # 9. พิมพ์ event - แสดง event ปัจจุบัน
+    # =============================================================
+    if text == "event":
+        events = get_active_events()
+        base_url = "https://line-chat-bot-trip-manager.onrender.com"
+        
+        if not events:
+            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่ (หรือทุกงานหมดอายุ/ถูกปิดแล้ว)\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n" + base_url
+        else:
+            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\n"
+            for i, e in enumerate(events, 1):
+                msg += f"{i}. งาน: {e.get('name', '-')}\n⏰ เวลาขาย: {e.get('saleTime', '-')}\n🔗 ลิงก์งาน: {e.get('url', '-')}\n-----------------------\n"
+            msg += f"\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
+        
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
+    # =============================================================
+    # 10. พิมพ์ stop event - แสดงรายการให้เลือกหยุด
+    # =============================================================
+    if text == "stop event":
+        events = get_active_events()
+        if not events:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี Event ที่กำลังทำงานอยู่"))
+            return
+        
+        user_state[user_id] = {"action": "stop_event", "events": events}
+        msg = "🚫 เลือกหมายเลข Event ที่คุณต้องการสั่งหยุดทำงาน (Stop):\n=======================\n"
+        for i, e in enumerate(events, 1):
+            msg += f"{i}. งาน: {e.get('name', '-')}\n🛑 (ID ย่อ: {e.get('id', '-')})\n-----------------------\n"
+        msg += "👉 พิมพ์เฉพาะ [ตัวเลขลำดับ] เพื่อระบุเลือกปิดงานชิ้นนั้นได้เลยครับ"
+        
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
+    # =============================================================
+    # 10.1 รับเลข event ที่เลือกหยุด
+    # =============================================================
+    if user_id in user_state and user_state[user_id].get("action") == "stop_event":
+        try:
+            choice = int(text) - 1
+            events = user_state[user_id]["events"]
+            if 0 <= choice < len(events):
+                selected = events[choice]
+                schedules = load_schedules()
+                for s in schedules:
+                    if s.get('id') == selected.get('id'):
+                        s['active'] = False
+                        break
+                save_schedules(schedules)
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
+            else:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง กรุณาลองใหม่"))
+        except:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์หมายเลขเท่านั้น"))
+        del user_state[user_id]
+        return
+
+# =============================================================
+# 5-6. รองรับรูปภาพสลิป
+# =============================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token):
     try:
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
         response = vision_client.text_detection(image=vision.Image(content=image_bytes))
-        amount = extract_amount(response.text_annotations[0].description) if response.text_annotations else None
+        text_detected = response.text_annotations[0].description if response.text_annotations else ""
+        
+        # หาจำนวนเงินจากสลิป
+        amounts = re.findall(r'(\d+(?:\.\d{2})?)', text_detected)
+        amount = None
+        for a in amounts:
+            try:
+                amt = float(a)
+                if amt > 0:
+                    amount = amt
+                    break
+            except:
+                continue
+        
         if amount:
             sender_name = get_display_name(user_id, group_id)
-            file_path = f"trips/{trip_id}/{message_id}.jpg"
-            supabase.storage.from_('slips').upload(path=file_path, file=image_bytes, file_options={"content-type": "image/jpeg"})
             supabase.table("expenses").insert({
-                "trip_id": trip_id, "line_user_id": user_id, "amount": amount,
-                "slip_url": supabase.storage.from_('slips').get_public_url(file_path),
+                "trip_id": trip_id,
+                "line_user_id": user_id,
+                "amount": amount,
+                "slip_url": f"slip_{message_id}",
                 "item_name": f"สลิป (โดย {sender_name})"
             }).execute()
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึกสลิป {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในสลิป กรุณาบันทึกด้วยข้อความ"))
     except Exception as e:
-        logger.error(f"Image Error: {e}")
+        logger.error(f"Process slip error: {e}")
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านสลิปได้ กรุณาลองใหม่"))
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
-    trip_data = get_active_trip(event)
-    if not trip_data: return
-    threading.Thread(target=process_slip, args=(event.message.id, trip_data["id"], event.source.user_id, getattr(event.source, 'group_id', None), event.reply_token)).start()
+    user_id = event.source.user_id
+    trip = get_active_trip(user_id)
+    if not trip:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่ พิมพ์ 'ทริป ชื่อทริป' เพื่อเริ่มทริป"))
+        return
+    threading.Thread(target=process_slip, args=(event.message.id, trip['id'], user_id, getattr(event.source, 'group_id', None), event.reply_token)).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
