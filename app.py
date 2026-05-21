@@ -742,33 +742,46 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุง Logic การทำงาน Showtime และแยก State จากสลิป
 # =================================================================
 
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชัน process_showtime
+# ปรับ Regex ให้กรองข้อมูลที่ไม่ใช่เวลาและจับคู่ชื่อศิลปินได้แม่นยำขึ้น
+# =================================================================
 def process_showtime(message_id, user_id, reply_token):
-    # ดึงข้อมูลจากรูปภาพ
-    message_content = line_bot_api.get_message_content(message_id)
-    image_bytes = b''.join(message_content.iter_content())
-    response = vision_client.text_detection(image=vision.Image(content=image_bytes))
-    text_detected = response.text_annotations[0].description if response.text_annotations else ""
-    
-    # ดึงเฉพาะบรรทัดที่มีช่วงเวลา (HH.MM-HH.MM)
-    lines = [line.strip() for line in text_detected.split('\n') if line.strip()]
-    extracted_data = []
-    
-    # Logic จับคู่: หาบรรทัดที่มีรูปแบบเวลา แล้วเอาศิลปินจากบรรทัดถัดไป
-    for i in range(len(lines) - 1):
-        if re.search(r'\d{2}.\d{2}\s*-\s*\d{2}.\d{2}', lines[i]):
-            time_part = lines[i]
-            artist_part = lines[i+1]
-            extracted_data.append(f"⏱️ {time_part} | 🎤 {artist_part}")
+    try:
+        message_content = line_bot_api.get_message_content(message_id)
+        image_bytes = b''.join(message_content.iter_content())
+        response = vision_client.text_detection(image=vision.Image(content=image_bytes))
+        text_detected = response.text_annotations[0].description if response.text_annotations else ""
+        
+        lines = [line.strip() for line in text_detected.split('\n') if line.strip()]
+        extracted_data = []
+        
+        # ปรับ Logic: กรองข้อมูลขยะและจับคู่เวลา (รูปแบบ HH.MM-HH.MM หรือ HH.MM)
+        for i in range(len(lines)):
+            line = lines[i]
+            # ค้นหาบรรทัดที่มีช่วงเวลา หรือ เวลาเดี่ยว
+            if re.search(r'\d{2}.\d{2}', line):
+                # ข้ามบรรทัดที่เป็นวันที่ (เช่น มีคำว่า MAY)
+                if re.search(r'(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)', line, re.IGNORECASE):
+                    continue
+                
+                # หากบรรทัดนี้คือเวลา ให้เอาศิลปินจากบรรทัดถัดไป
+                if i + 1 < len(lines):
+                    time_part = re.sub(r'\s+', '', line) # ลบช่องว่างในเวลา
+                    artist_part = lines[i+1]
+                    extracted_data.append(f"⏱️ {time_part} | 🎤 {artist_part}")
+        
+        if not extracted_data:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ อ่านตารางไม่พบข้อมูล กรุณาส่งรูปภาพที่ชัดเจน"))
+            return
 
-    if not extracted_data:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ อ่านข้อมูลไม่สำเร็จ ลองส่งรูปใหม่"))
-        return
-
-    # เก็บไว้ใน state เพื่อรอการสั่ง "save"
-    user_state[user_id] = {"action": "waiting_save_showtime", "data": extracted_data}
-    
-    msg = "📋 **ตารางการแสดง:**\n\n" + "\n".join(extracted_data) + "\n\nพิมพ์ 'save' เพื่อบันทึก หรือ 'editshowtime' เพื่อเริ่มใหม่"
-    line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        user_state[user_id] = {"action": "waiting_save_showtime", "data": extracted_data}
+        msg = "📋 **ตารางการแสดง:**\n\n" + "\n".join(extracted_data) + "\n\nพิมพ์ 'save' เพื่อบันทึก หรือ 'update showtime' เพื่อแก้ไขใหม่"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        
+    except Exception as e:
+        logger.error(f"Process showtime error: {e}")
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ระบบขัดข้อง"))
         
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
