@@ -699,37 +699,40 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้ กรุณาลองใหม่"))
         
 # =================================================================
-# [อัปเดตล่าสุด 2026-05-21]: เพิ่มฟังก์ชันประมวลผลรูปภาพสำหรับสแกนโชว์ไทม์ (วางต่อท้ายฟังก์ชัน process_slip)
+# [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชัน process_showtime (วางต่อจากฟังก์ชัน process_slip)
+# แก้ไข Regex ให้รองรับการเว้นวรรคและเครื่องหมาย ดึงเวลาได้ครบถ้วน และส่งเป็นข้อความสรุปทั้งหมดเพื่อป้องกันข้อมูลตกหล่น
 # =================================================================
 def process_showtime(message_id, user_id, reply_token):
     try:
+        # [Comment เดิม] ดึงรูปภาพและข้อความจาก OCR
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
         response = vision_client.text_detection(image=vision.Image(content=image_bytes))
         text_detected = response.text_annotations[0].description if response.text_annotations else ""
         
-        time_match = re.search(r'(\d{2}[:\.]\d{2})', text_detected)
-        detected_time = time_match.group(1) if time_match else "ไม่ระบุเวลา"
+        # [อัปเดตล่าสุด 2026-05-21]: ปรับ Regex ดึงช่วงเวลาและเวลาเดี่ยวทุกรูปแบบที่พบในภาพรวมถึงการเว้นวรรค
+        time_slots = re.findall(r'(\d{2}[\s[:\.]]\d{2}(?:\s*-\s*\d{2}[\s[:\.]]\d{2})?)', text_detected)
         
+        if not time_slots:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบข้อมูลเวลาในรูปภาพ กรุณาลองใหม่อีกครั้ง"))
+            return
+
         lines = [line.strip() for line in text_detected.split('\n') if line.strip()]
-        detected_artist = "ไม่พบชื่อศิลปิน"
-        for i, line in enumerate(lines):
-            if time_match and time_match.group(1) in line:
-                if i + 1 < len(lines):
-                    detected_artist = lines[i+1]
-                break
-                
-        msg = f"📋 **Showtime ข้อมูลตารางการแสดง**\n\n"
-        msg += f"⏱️ เวลาโชว์: {detected_time}\n"
-        msg += f"🎤 ศิลปิน/วง: {detected_artist}\n\n"
-        msg += f"✏️ หากต้องการแก้ไขเนื่องจากมีศิลปินพิเศษ สามารถพิมพ์ชื่อศิลปินใหม่ส่งมาได้เลยครับ"
+        result_msg = "📋 **ข้อมูลตารางการแสดงทั้งหมด**\n\n"
         
-        user_state[user_id] = {
-            "action": "edit_showtime",
-            "detected_time": detected_time,
-            "detected_artist": detected_artist
-        }
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        # [อัปเดตล่าสุด 2026-05-21]: วนลูปตามรายการเวลาเพื่อจับคู่ชื่อศิลปินในบรรทัดถัดไปมารวมเป็นข้อความยาวต่อเนื่อง
+        for t_slot in time_slots:
+            artist = "ไม่พบชื่อศิลปิน"
+            for i, line in enumerate(lines):
+                if t_slot in line:
+                    if i + 1 < len(lines) and not re.search(r'\d{2}[\s[:\.]]\d{2}', lines[i+1]):
+                        artist = lines[i+1]
+                    break
+            
+            clean_time = re.sub(r'[\s\.]', ':', t_slot).replace(':-:', ' - ')
+            result_msg += f"⏱️ เวลา: {clean_time}\n🎤 ศิลปิน: {artist}\n────────────────\n"
+            
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=result_msg.strip()))
     except Exception as e:
         logger.error(f"Process showtime error: {e}")
         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ระบบไม่สามารถอ่านข้อมูลโชว์ไทม์ได้ กรุณาลองใหม่อีกครั้ง"))
