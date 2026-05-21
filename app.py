@@ -346,7 +346,19 @@ def callback():
     except InvalidSignatureError:
         abort(400)
     return 'OK'
-
+    
+# [อัปเดตล่าสุด 2026-05-21]: ฟังก์ชันดึงตารางล่าสุดจากฐานข้อมูลหรือไฟล์
+def get_latest_showtime():
+    # สมมติว่าดึงจาก Supabase หรือไฟล์ที่บันทึกไว้
+    # ปรับตามชื่อตารางหรือตำแหน่งไฟล์ของคุณ
+    try:
+        response = supabase.table("showtimes").select("*").order("created_at", desc=True).limit(1).execute()
+        if response.data:
+            return response.data[0]['content'] # ข้อมูลตารางที่บันทึกไว้
+    except:
+        pass
+    return None
+    
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text(event):
     text = event.message.text.strip()
@@ -357,8 +369,13 @@ def handle_text(event):
 
     # 1. จัดการคำสั่งพิเศษ (Showtime) ก่อนเสมอ
     if text_lower == "showtime":
-        user_state[user_id] = {"action": "waiting_showtime_image"}
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="📸 ส่งรูปตารางโชว์ไทม์มาได้เลยครับ (ระบบจะหยุดรับสลิปชั่วคราว)"))
+        latest = get_latest_showtime()
+        if latest:
+            msg = f"📋 **ตารางการแสดงล่าสุด:**\n\n{latest}\n\nส่งรูปภาพเพื่อ 'update showtime' หรือพิมพ์ 'update showtime' เพื่อเริ่มการแก้ไข"
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        else:
+            user_state[user_id] = {"action": "waiting_showtime_image"}
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="ไม่พบตารางล่าสุด ส่งรูปตารางโชว์ไทม์มาได้เลยครับ"))
         return
 
     if text_lower == "save" and user_state.get(user_id, {}).get("action") == "waiting_save_showtime":
