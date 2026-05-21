@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
 handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
 
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: ประกาศตัวแปรเก็บสถานะพฤติกรรมผู้ใช้งานสำหรับฟังก์ชันโชว์ไทม์และจบทริป
+# =================================================================
+user_state = {}
+
 # Google Vision
 creds_dict = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
 creds = service_account.Credentials.from_service_account_info(creds_dict)
@@ -350,6 +355,7 @@ def handle_text(event):
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
 
+    # [Comment เดิม] ตรวจสอบสเตตัสขั้นตอนกระบวนการปิดทริป
     if user_id in user_state and user_state[user_id].get("action") == "end_trip":
         clean_text = text.replace(',', '')
         if not clean_text.isdigit():
@@ -392,7 +398,7 @@ def handle_text(event):
         return
 
     # =================================================================
-    # [อัปเดตล่าสุด 2026-05-21]: ระบบดักจับคำสั่งพิมพ์ โชว์/showtime และอัปเดตแก้ไขศิลปินพิเศษ
+    # [อัปเดตล่าสุด 2026-05-21]: เงื่อนไขตรวจสอบการเปิดเรียกโหมดสแกนภาพตารางและการแก้ไขข้อมูลกรณีมีศิลปินพิเศษ
     # =================================================================
     if text_lower in ["โชว์", "showtime"]:
         user_state[user_id] = {"action": "waiting_showtime_image"}
