@@ -230,8 +230,9 @@ def send_menu(reply_token):
     )
 
 # =================================================================
-# [อัปเดตล่าสุด 2026-05-21]: ปรับแก้ฟังก์ชันแกะยอดเงิน OCR 
-# เพิ่มเงื่อนไขตรวจสอบคีย์เวิร์ด 'จำนวนเงิน' หรือ 'บาท' เพื่อล็อกเจอยอดเงินโอนจริงและข้ามเลข Ref
+# [อัปเดตล่าสุด 2026-05-21]: เพิ่มระบบรองรับการอ่านยอดรวมจาก 'บิล' และ 'ใบเสร็จ'
+# เพิ่มคีย์เวิร์ดยอดรวมสุทธิท้ายบิล (เช่น รวมทั้งสิ้น, ยอดคงเหลือ, net total, grand total)
+# ย้อนสแกนจากบรรทัดล่างขึ้นบนเพื่อป้องกันการดักเจอราคารายการย่อยกลางบิล
 # =================================================================
 def extract_amount(text):
     if not text:
@@ -239,10 +240,30 @@ def extract_amount(text):
     
     lines = [line.strip().replace(' ', '') for line in text.split('\n') if line.strip()]
     
-    # ดักหาจากคีย์เวิร์ดที่เกี่ยวข้องกับตัวเงินโดยตรง
+    # 1. ล็อกเป้าหมายคีย์เวิร์ดยอดรวมของ "บิล/ใบเสร็จ/ร้านอาหาร" โดยค้นหาจากล่างขึ้นบน
+    bill_keywords = ['รวมทั้งสิ้น', 'ยอดรวมสุทธิ', 'จำนวนเงินทั้งสิ้น', 'ยอดชำระ', 'ยอดเงินสุทธิ', 'nettotal', 'grandtotal', 'totalamount', 'totaldue', 'amountdue', 'รวมเงิน']
+    for i in reversed(range(len(lines))):
+        line_lower = lines[i].lower()
+        if any(k in line_lower for k in bill_keywords):
+            search_zone = lines[i]
+            if i + 1 < len(lines):
+                search_zone += " " + lines[i+1]
+            
+            match = re.search(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', search_zone)
+            if match:
+                try:
+                    num = float(match.group(1).replace(',', ''))
+                    if 10 <= num <= 500000:
+                        logger.info(f"Bill Grand Total found: {num}")
+                        return num
+                except:
+                    continue
+
+    # 2. คีย์เวิร์ดมาตรฐานของ "สลิปโอนเงิน" ทั่วไป
+    slip_keywords = ['จำนวนเงิน', 'จำนวน', 'ยอดรวม', 'total', 'amt']
     for i, line in enumerate(lines):
-        lower_line = line.lower()
-        if any(k in lower_line for k in ['จำนวนเงิน', 'จำนวน', 'ยอดรวม', 'total', 'amt']):
+        line_lower = line.lower()
+        if any(k in line_lower for k in slip_keywords):
             search_zone = line
             if i + 1 < len(lines):
                 search_zone += " " + lines[i+1]
@@ -252,13 +273,13 @@ def extract_amount(text):
                 try:
                     num = float(match.group(1).replace(',', ''))
                     if 10 <= num <= 500000:
-                        logger.info(f"Found targeted amount: {num}")
+                        logger.info(f"Slip Amount found: {num}")
                         return num
                 except:
                     continue
 
-    # หากลยุทธ์รอง มองหาแถวที่มีคำว่า บาท หรือ THB
-    for line in lines:
+    # 3. เงื่อนไขดักท้ายบรรทัดที่มีหน่วยเงินบาทต่อท้ายกรณีสแกนคีย์เวิร์ดไม่เจอ
+    for line in reversed(lines):
         if 'บาท' in line or 'thb' in line.lower():
             match = re.search(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', line)
             if match:
