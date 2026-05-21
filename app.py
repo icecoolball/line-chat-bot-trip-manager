@@ -54,26 +54,19 @@ def save_showtime(showtime_data):
         json.dump(showtime_data, f, ensure_ascii=False, indent=2)
 
 def sort_showtime_by_time(schedule):
-    """เรียง showtime ตาม time จากน้อย > มาก
-    รองรับ: 09:00 วันนี้ < 23:50 วันนี้ < 00:00 วันหน้า < 08:59 วันหน้า
-    Logic: ถ้า time < 09:00 ให้บวก 24*60 (ถือว่าเป็นวันหน้า)
-    """
-    def time_to_sort_key(time_str):
-        """Convert 'HH:MM-HH:MM' to sort key
-        ถ้า HH < 09:00 (เช่น 00:00-08:59) ถือว่าเป็นวันหน้า +1440 minutes
-        """
+    """เรียง showtime: 09:00-23:59 มาก่อน, แล้ว 00:00-08:59"""
+    def get_sort_key(item):
+        time_str = item.get("time", "00:00").split('-')[0]
         try:
-            start_time = time_str.split('-')[0]
-            h, m = map(int, start_time.split(':'))
-            minutes = h * 60 + m
-            # ถ้าเวลา < 09:00 ถือว่าเป็นวันหน้า (บวก 24 ชั่วโมง)
-            if h < 9:
-                minutes += 24 * 60
-            return minutes
+            h, m = map(int, time_str.split(':'))
+            # ถ้า 00:00-08:59 ให้บวก 24 ชม. ไว้หลังสุด
+            if 0 <= h < 9:
+                return (1, h * 60 + m)   # group 1 (หลัง)
+            else:
+                return (0, h * 60 + m)   # group 0 (หน้า)
         except:
-            return 0
-    
-    return sorted(schedule, key=lambda x: time_to_sort_key(x.get("time", "00:00")))
+            return (2, 0)
+    return sorted(schedule, key=get_sort_key)
 
 def format_showtime_message():
     """สร้าง message แสดง showtime ที่เก็บไว้ (เรียงตาม time)"""
@@ -528,55 +521,59 @@ def handle_text(event):
         if not existing.get("schedule"):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ยังไม่มี Showtime ให้แก้ไข"))
             return
-        msg = "✏️ แก้ไข Showtime\n"
+        msg = "✏️ แก้ไข Showtime (รองรับหลายบรรทัด)\n"
         msg += format_showtime_message()
-        msg += "\n\n📸 ส่งรูป Showtime ใหม่ หรือ 📝 พิมพ์เพื่อเพิ่ม/แก้เฉพาะศิลปิน"
-        msg += "\n👉 เช่น: 13:00-13:50 ROMANCE (ถ้ามีแล้วจะแทนที่)"
+        msg += "\n\n📸 ส่งรูป Showtime ใหม่ หรือ 📝 พิมพ์เพื่อเพิ่ม/แก้เฉพาะศิลปิน (ทีละหลายบรรทัด)"
+        msg += "\n👉 เช่น:\n13:00-13:50 ROMANCE\n14:00-14:50 SWEET MULLET"
         user_state[user_id] = {"action": "showtime_mode", "edit_mode": True}
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
-    # [Showtime fix]: รับข้อมูล showtime จากการพิมพ์ (เช่น "13:00-13:50 ROMANCE")
+    # =============================================================
+    # [Showtime fix]: รับข้อมูล showtime จากการพิมพ์ (รองรับหลายบรรทัด)
+    # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "showtime_mode" and \
        user_state[user_id].get("edit_mode"):
-        # ตรวจ pattern HH:MM-HH:MM ศิลปิน
+        lines = text.splitlines()
+        updated = False
+        existing = load_showtime()
+        schedule = existing.get("schedule", [])
         time_pattern_input = r'^(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+)$'
-        match = re.match(time_pattern_input, text)
-        if match:
-            time_input = f"{match.group(1)}-{match.group(2)}".replace('.', ':')
-            artist_input = match.group(3).strip()
-            
-            existing = load_showtime()
-            schedule = existing.get("schedule", [])
-            
-            # หาและแทนที่ หรือเพิ่มใหม่
-            found = False
-            for item in schedule:
-                if item["time"] == time_input:
-                    item["artist"] = artist_input
-                    found = True
-                    break
-            if not found:
-                schedule.append({"time": time_input, "artist": artist_input})
-            
-            # [Fix 1]: Sort ก่อนบันทึก
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            match = re.match(time_pattern_input, line)
+            if match:
+                time_input = f"{match.group(1)}-{match.group(2)}".replace('.', ':')
+                artist_input = match.group(3).strip()
+                found = False
+                for item in schedule:
+                    if item["time"] == time_input:
+                        item["artist"] = artist_input
+                        found = True
+                        break
+                if not found:
+                    schedule.append({"time": time_input, "artist": artist_input})
+                updated = True
+        
+        if updated:
             sorted_schedule = sort_showtime_by_time(schedule)
             existing["schedule"] = sorted_schedule
             existing["last_updated"] = datetime.now().isoformat()
             save_showtime(existing)
-            
             msg = "✅ อัปเดต Showtime เสร็จ!\n\n"
             msg += format_showtime_message()
             msg += "\n\n📝 พิมพ์เพิ่มเติม หรือ 'save' เพื่อสิ้นสุดการแก้ไข"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
-            return
         else:
             line_bot_api.reply_message(reply_token, TextSendMessage(
-                text="⚠️ Format ไม่ถูกต้อง\n\n"
+                text="⚠️ ไม่พบรูปแบบที่ถูกต้องในข้อความ\n\n"
                      "👉 ตัวอย่าง: 13:00-13:50 ROMANCE\n"
                      "👉 หรือส่งรูป Showtime ใหม่"
             ))
-            return
+        return
 
     # =============================================================
     # 0. เมนู: เมนูหลัก หรือ เมนู showtime ถ้าอยู่ใน showtime_mode
@@ -589,7 +586,7 @@ def handle_text(event):
             msg += "✏️ **update showtime** - แก้ไข Showtime (พิมพ์หรือส่งรูป)\n"
             msg += "✏️ **editshowtime** - แก้ไข Showtime\n"
             if user_state[user_id].get("edit_mode"):
-                msg += "📝 **HH:MM-HH:MM ศิลปิน** - เพิ่ม/แก้ไข Showtime\n"
+                msg += "📝 **HH:MM-HH:MM ศิลปิน** - เพิ่ม/แก้ไข Showtime (หลายบรรทัดได้)\n"
             msg += "💾 **save** - บันทึก Showtime และออกจาก Function\n"
             msg += "❌ **ยกเลิก** - ออกจากโหมด Showtime\n"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
@@ -602,20 +599,37 @@ def handle_text(event):
     # 0.5 Showtime Mode Guard: ถ้าอยู่ใน showtime_mode → บล็อก command อื่น
     # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
-        # อนุญาตแค่ showtime commands
-        if not (text_lower == "save" or 
-                text_lower == "showtime" or 
-                text_lower == "editshowtime" or 
-                text_lower == "update showtime" or
-                text == "เมนู" or text_lower == "menu" or
-                text == "ยกเลิก" or text_lower == "cancel" or
-                (user_state[user_id].get("edit_mode") and re.match(r'^(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+)$', text))):
-            line_bot_api.reply_message(reply_token, TextSendMessage(
-                text="⏸️ ตอนนี้อยู่ในโหมด Showtime\n\n"
-                     "อนุญาตแค่: showtime, editshowtime, update showtime, save, menu, ยกเลิก\n\n"
-                     "พิมพ์ 'menu' เพื่อดูคำสั่ง Showtime"
-            ))
-            return
+        # ถ้า edit_mode=True ให้ตรวจว่าทุกบรรทัดที่ไม่ว่างตรง pattern หรือไม่
+        if user_state[user_id].get("edit_mode"):
+            lines = text.splitlines()
+            all_valid = True
+            time_pattern_input = r'^(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+)$'
+            for line in lines:
+                line = line.strip()
+                if line and not re.match(time_pattern_input, line):
+                    all_valid = False
+                    break
+            if not all_valid:
+                line_bot_api.reply_message(reply_token, TextSendMessage(
+                    text="⚠️ รูปแบบไม่ถูกต้อง\n👉 ตัวอย่าง: 13:00-13:50 ROMANCE"
+                ))
+                return
+            # ถ้าทุกบรรทัดถูกต้อง ให้ผ่านไป (เดี๋ยวส่วนรับ multi-line จะจัดการ)
+        else:
+            # อนุญาตแค่ showtime commands
+            if not (text_lower == "save" or 
+                    text_lower == "showtime" or 
+                    text_lower == "editshowtime" or 
+                    text_lower == "update showtime" or
+                    text == "เมนู" or text_lower == "menu" or
+                    text == "ยกเลิก" or text_lower == "cancel"):
+                line_bot_api.reply_message(reply_token, TextSendMessage(
+                    text="⏸️ ตอนนี้อยู่ในโหมด Showtime\n\n"
+                         "อนุญาตแค่: showtime, editshowtime, update showtime, save, menu, ยกเลิก\n\n"
+                         "พิมพ์ 'menu' เพื่อดูคำสั่ง Showtime"
+                ))
+                return
+
     if text == "ยกเลิก" or text_lower == "cancel":
         if user_id in user_state:
             if user_state[user_id].get("action") == "showtime_mode":
@@ -875,7 +889,12 @@ def handle_text(event):
 
     # =============================================================
     # 7. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
+    # [Showtime fix]: ถ้าอยู่ใน showtime_mode ให้บล็อกการบันทึกยอด
     # =============================================================
+    if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+        # อยู่ในโหมด showtime → ไม่บันทึกยอด
+        return
+
     if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก")) and \
        not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel")):
         trip = get_active_trip(user_id, group_id)
