@@ -758,47 +758,61 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุง Logic การทำงาน Showtime และแยก State จากสลิป
 # =================================================================
-
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชัน process_showtime
 # ปรับ Regex ให้กรองข้อมูลที่ไม่ใช่เวลาและจับคู่ชื่อศิลปินได้แม่นยำขึ้น
+# =================================================================
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชัน process_showtime
+# ปรับ logic การจับคู่เวลาและศิลปินให้แม่นยำขึ้นแม้ OCR จะแบ่งบรรทัด
 # =================================================================
 def process_showtime(message_id, user_id, reply_token):
     try:
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
         response = vision_client.text_detection(image=vision.Image(content=image_bytes))
-        text_detected = response.text_annotations[0].description if response.text_annotations else ""
         
-        lines = [line.strip() for line in text_detected.split('\n') if line.strip()]
+        # ดึงข้อมูลพร้อมตำแหน่ง Y เพื่อเรียงลำดับให้ถูกต้องตามภาพ
+        annotations = response.text_annotations
+        if not annotations:
+            raise Exception("ไม่พบข้อความในรูป")
+            
+        # สร้างรายการบรรทัดโดยจัดกลุ่มตามตำแหน่งแนวตั้ง (Y)
+        lines_data = []
+        for ann in annotations[1:]: # ข้าม index 0 เพราะคือรวมข้อความทั้งหมด
+            lines_data.append({'text': ann.description, 'y': ann.bounding_poly.vertices[0].y})
+        
+        # เรียงตามแกน Y และรวมคำที่อยู่บรรทัดเดียวกัน
+        lines_data.sort(key=lambda x: x['y'])
+        
         extracted_data = []
-        
-        # ปรับ Logic: กรองข้อมูลขยะและจับคู่เวลา (รูปแบบ HH.MM-HH.MM หรือ HH.MM)
-        for i in range(len(lines)):
-            line = lines[i]
-            # ค้นหาบรรทัดที่มีช่วงเวลา หรือ เวลาเดี่ยว
-            if re.search(r'\d{2}.\d{2}', line):
-                # ข้ามบรรทัดที่เป็นวันที่ (เช่น มีคำว่า MAY)
-                if re.search(r'(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)', line, re.IGNORECASE):
-                    continue
+        for i in range(len(lines_data)):
+            line_text = lines_data[i]['text']
+            
+            # ค้นหาบรรทัดที่มีช่วงเวลา (เช่น 12.00-12.50)
+            if re.search(r'\d{2}.\d{2}\s*-\s*\d{2}.\d{2}', line_text):
+                time_slot = re.sub(r'\s+', '', line_text)
                 
-                # หากบรรทัดนี้คือเวลา ให้เอาศิลปินจากบรรทัดถัดไป
-                if i + 1 < len(lines):
-                    time_part = re.sub(r'\s+', '', line) # ลบช่องว่างในเวลา
-                    artist_part = lines[i+1]
-                    extracted_data.append(f"⏱️ {time_part} | 🎤 {artist_part}")
+                # พยายามดึงศิลปินจากบรรทัดถัดไป
+                artist = "ไม่ระบุ"
+                if i + 1 < len(lines_data):
+                    # เช็คว่าบรรทัดถัดไปไม่ใช่เวลา (คือศิลปิน)
+                    if not re.search(r'\d{2}.\d{2}', lines_data[i+1]['text']):
+                        artist = lines_data[i+1]['text']
+                        
+                extracted_data.append(f"⏱️ {time_slot} | 🎤 {artist}")
         
         if not extracted_data:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ อ่านตารางไม่พบข้อมูล กรุณาส่งรูปภาพที่ชัดเจน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ อ่านตารางไม่ครบ ลองส่งรูปที่เห็นตัวอักษรชัดเจนครับ"))
             return
 
         user_state[user_id] = {"action": "waiting_save_showtime", "data": extracted_data}
-        msg = "📋 **ตารางการแสดง:**\n\n" + "\n".join(extracted_data) + "\n\nพิมพ์ 'save' เพื่อบันทึก หรือ 'update showtime' เพื่อแก้ไขใหม่"
+        msg = "📋 **ตารางการแสดง:**\n\n" + "\n".join(extracted_data) + "\n\nพิมพ์ 'save' เพื่อบันทึก หรือ 'update showtime' เพื่อส่งรูปใหม่"
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         
     except Exception as e:
         logger.error(f"Process showtime error: {e}")
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ระบบขัดข้อง"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาดในการประมวลผล"))
         
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
