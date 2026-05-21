@@ -872,13 +872,15 @@ def handle_text(event):
         avg = total / num_people
         msg = f"🚀 ทริป: {trip_title}\n📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n👥 จำนวนคน: {num_people}\n\n💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
         
+        # [อัปเดตล่าสุด 2026-05-21]: แก้ไข logic การแสดงผล end trip
+        # ถ้า diff > 0 แสดงว่าจ่ายเกิน → รับคืน, ถ้า diff < 0 จ่ายน้อย → จ่ายเพิ่ม
         for uid, amt in user_totals.items():
             name = get_display_name(uid, None)
             diff = amt - avg
             if diff > 0:
-                msg += f"• {name}: จ่ายเพิ่ม {diff:,.2f} บาท\n"
+                msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
             elif diff < 0:
-                msg += f"• {name}: รับคืน {abs(diff):,.2f} บาท\n"
+                msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
             else:
                 msg += f"• {name}: เรียบร้อยแล้ว\n"
         
