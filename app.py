@@ -355,6 +355,42 @@ def handle_text(event):
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
 
+    # 1. จัดการคำสั่งพิเศษ (Showtime) ก่อนเสมอ
+    if text_lower == "showtime":
+        user_state[user_id] = {"action": "waiting_showtime_image"}
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="📸 ส่งรูปตารางโชว์ไทม์มาได้เลยครับ (ระบบจะหยุดรับสลิปชั่วคราว)"))
+        return
+
+    if text_lower == "save" and user_state.get(user_id, {}).get("action") == "waiting_save_showtime":
+        user_state[user_id] = {} # ล้าง state กลับสู่ปกติ
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ บันทึกตารางเรียบร้อยแล้วครับ"))
+        return
+
+    if text_lower == "editshowtime":
+        user_state[user_id] = {"action": "waiting_showtime_image"}
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="✏️ ส่งรูปตารางใหม่เพื่อแก้ไขครับ"))
+        return
+
+    # 2. ถ้าไม่ได้อยู่ในโหมด Showtime ให้ทำงานตามระบบปกติ
+    state = user_state.get(user_id, {})
+    
+    # ถ้าติดอยู่ในโหมด Showtime แต่พิมพ์ข้อความอื่นที่ไม่ใช่ save/editshowtime
+    if state.get("action") in ["waiting_showtime_image", "waiting_save_showtime"]:
+        if state.get("action") == "waiting_showtime_image":
+             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาส่งเป็นรูปภาพตารางโชว์ไทม์ครับ"))
+        else:
+             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ พิมพ์ 'save' เพื่อบันทึก หรือ 'editshowtime' เพื่อแก้ไข"))
+        return
+
+    # 3. จัดการขั้นตอน End Trip (ถ้ากำลังปิดทริป)
+    if state.get("action") == "end_trip":
+        # (นำ code เดิมของคุณที่ใช้คำนวณเงินมาวางตรงนี้)
+        # ... logic เดิมที่ใช้จัดการตัวเลขจำนวนคน ...
+        return
+
+    # 4. จัดการข้อความทั่วไป/สลิป (ถ้าพิมพ์ปกติ)
+    # ... logic ตรวจสอบข้อความอื่นๆ ...
+    
     # [Comment เดิม] ตรวจสอบสเตตัสขั้นตอนกระบวนการปิดทริป
     if user_id in user_state and user_state[user_id].get("action") == "end_trip":
         clean_text = text.replace(',', '')
@@ -702,40 +738,37 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชัน process_showtime
 # ปรับ Regex ให้รองรับรูปแบบเวลาทุกสไตล์ในตารางและแก้ไขการวนลูปดึงชื่อศิลปิน
 # =================================================================
-def process_showtime(message_id, user_id, reply_token):
-    try:
-        # [Comment เดิม] ดึงรูปภาพและข้อความจาก OCR
-        message_content = line_bot_api.get_message_content(message_id)
-        image_bytes = b''.join(message_content.iter_content())
-        response = vision_client.text_detection(image=vision.Image(content=image_bytes))
-        text_detected = response.text_annotations[0].description if response.text_annotations else ""
-        
-        # [อัปเดตล่าสุด 2026-05-21]: ปรับ Regex ดึงเวลาแบบ HH:MM หรือ HH.MM ที่อาจมีช่องว่างหรือขีดคั่น
-        time_slots = re.findall(r'(\d{2}[:\.]\s?\d{2}(?:\s*[-–]\s*\d{2}[:\.]\s?\d{2})?)', text_detected)
-        
-        if not time_slots:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบเวลาในตาราง"))
-            return
+# =================================================================
+# [อัปเดตล่าสุด 2026-05-21]: ปรับปรุง Logic การทำงาน Showtime และแยก State จากสลิป
+# =================================================================
 
-        lines = [line.strip() for line in text_detected.split('\n') if line.strip()]
-        result_msg = "📋 **ตารางการแสดง:**\n\n"
-        
-        # [อัปเดตล่าสุด 2026-05-21]: วนลูปตามบรรทัดที่พบเวลาเพื่อดึงชื่อศิลปินในบรรทัดเดียวกันหรือถัดไป
-        for t_slot in time_slots:
-            artist = "ไม่พบศิลปิน"
-            for i, line in enumerate(lines):
-                if t_slot in line:
-                    if len(line.replace(t_slot, "").strip()) > 2:
-                        artist = line.replace(t_slot, "").strip()
-                    elif i + 1 < len(lines) and not re.search(r'\d{2}[:\.]\d{2}', lines[i+1]):
-                        artist = lines[i+1]
-                    break
-            result_msg += f"⏱️ {t_slot.replace('.', ':')} | 🎤 {artist}\n"
-            
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=result_msg.strip()))
-    except Exception as e:
-        logger.error(f"Process showtime error: {e}")
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ อ่านตารางไม่สำเร็จ"))
+def process_showtime(message_id, user_id, reply_token):
+    # ดึงข้อมูลจากรูปภาพ
+    message_content = line_bot_api.get_message_content(message_id)
+    image_bytes = b''.join(message_content.iter_content())
+    response = vision_client.text_detection(image=vision.Image(content=image_bytes))
+    text_detected = response.text_annotations[0].description if response.text_annotations else ""
+    
+    # ดึงเฉพาะบรรทัดที่มีช่วงเวลา (HH.MM-HH.MM)
+    lines = [line.strip() for line in text_detected.split('\n') if line.strip()]
+    extracted_data = []
+    
+    # Logic จับคู่: หาบรรทัดที่มีรูปแบบเวลา แล้วเอาศิลปินจากบรรทัดถัดไป
+    for i in range(len(lines) - 1):
+        if re.search(r'\d{2}.\d{2}\s*-\s*\d{2}.\d{2}', lines[i]):
+            time_part = lines[i]
+            artist_part = lines[i+1]
+            extracted_data.append(f"⏱️ {time_part} | 🎤 {artist_part}")
+
+    if not extracted_data:
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ อ่านข้อมูลไม่สำเร็จ ลองส่งรูปใหม่"))
+        return
+
+    # เก็บไว้ใน state เพื่อรอการสั่ง "save"
+    user_state[user_id] = {"action": "waiting_save_showtime", "data": extracted_data}
+    
+    msg = "📋 **ตารางการแสดง:**\n\n" + "\n".join(extracted_data) + "\n\nพิมพ์ 'save' เพื่อบันทึก หรือ 'editshowtime' เพื่อเริ่มใหม่"
+    line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
