@@ -181,9 +181,7 @@ def get_all_expenses(trip_id):
     try:
         res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
         expenses = res.data if res.data else []
-        # เรียงตาม id จริงจาก DB
         expenses.sort(key=lambda x: x['id'])
-        # เพิ่ม seq_id (ลำดับที่ 1,2,3...) สำหรับแสดงผล
         for idx, exp in enumerate(expenses, 1):
             exp['seq_id'] = idx
         return expenses
@@ -192,7 +190,6 @@ def get_all_expenses(trip_id):
         return []
 
 def update_expense_amount(expense_id, new_amount):
-    """แก้ไขจำนวนเงินของรายการค่าใช้จ่าย"""
     try:
         supabase.table("expenses").update({"amount": new_amount}).eq("id", expense_id).execute()
         return True
@@ -201,7 +198,6 @@ def update_expense_amount(expense_id, new_amount):
         return False
 
 def send_menu(reply_token):
-    """ส่งเมนูคำสั่งทั้งหมดแบบ Quick Reply"""
     quick_reply = QuickReply(items=[
         QuickReplyButton(action=MessageAction(label="📋 ID", text="id")),
         QuickReplyButton(action=MessageAction(label="🚀 สร้างทริป", text="ทริป")),
@@ -235,29 +231,47 @@ def send_menu(reply_token):
 
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชันดึงจำนวนเงิน (OCR) ให้แม่นยำขึ้น
+# - หาบรรทัดที่มี "จำนวน:" หรือ "ยอดรวม" แล้วดึงตัวเลขถัดไป
+# - กรองเลขบัญชี (ยาวเกิน 8 หลักหรือเป็นเลขบัญชี 10-12 หลัก)
 # =================================================================
 def extract_amount(text):
-    """ดึงจำนวนเงินจากข้อความสลิป/บิล - จำกัดช่วง 10-10,000,000 และตัดสกุลเงินอื่นออก"""
     if not text:
         return None
     
     lines = text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        if re.search(r'(เลขที่|Reference|TR[0-9]|IB[0-9])', line, re.IGNORECASE):
-            continue
-        if re.search(r'\d+', line):
-            cleaned_lines.append(line)
-    text = ' '.join(cleaned_lines)
+    # มองหาบรรทัดที่มีคำว่า "จำนวน" หรือ "ยอดรวม" หรือ "total"
+    amount_line = None
+    for i, line in enumerate(lines):
+        lower_line = line.lower()
+        if 'จำนวน' in lower_line or 'ยอดรวม' in lower_line or 'total' in lower_line:
+            amount_line = line
+            # ถ้ามีเครื่องหมาย : ให้ดูบรรทัดถัดไปด้วย
+            if ':' in line and i+1 < len(lines):
+                next_line = lines[i+1]
+                # ถ้าบรรทัดถัดไปมีตัวเลข ให้รวมกัน
+                if re.search(r'\d', next_line):
+                    amount_line = line + ' ' + next_line
+            break
     
-    total_keywords = ['รวม', 'total', 'ยอดรวม', 'จำนวนเงิน', 'ราคารวม', 'net', 'amount', 'ทั้งสิ้น']
-    has_keyword = any(kw in text.lower() for kw in total_keywords)
+    if amount_line:
+        # หาตัวเลขในบรรทัดนั้น (รวมทศนิยม)
+        numbers = re.findall(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', amount_line)
+        for num_str in numbers:
+            try:
+                num = float(num_str.replace(',', ''))
+                # ตัดเลขที่ยาวเกินไป (เลขบัญชี) และเลขต่ำกว่า 10
+                if 10 <= num <= 10000000 and len(str(int(num))) <= 8:
+                    logger.info(f"Found amount from amount line: {num}")
+                    return num
+            except:
+                continue
     
-    amounts = re.findall(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', text)
+    # ถ้าไม่เจอ ให้หาทุกตัวเลขในข้อความ
+    all_numbers = re.findall(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', text)
     valid = []
-    for a in amounts:
+    for num_str in all_numbers:
         try:
-            num = float(a.replace(',', ''))
+            num = float(num_str.replace(',', ''))
             if 10 <= num <= 10000000 and len(str(int(num))) <= 8:
                 valid.append(num)
         except:
@@ -266,12 +280,10 @@ def extract_amount(text):
     if not valid:
         return None
     
-    if has_keyword:
-        return max(valid)
-    return max(valid) if valid else None
+    # เลือกค่าที่มากที่สุด (มักเป็นยอดรวม)
+    return max(valid)
 
 def parse_expense_text(text):
-    """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'"""
     parts = text.split()
     if len(parts) >= 3:
         amount_match = re.search(r'(\d+(?:\.\d{2})?)', text)
@@ -283,7 +295,6 @@ def parse_expense_text(text):
     return None, None, None
 
 def get_total_expenses(trip_id):
-    """คำนวณยอดรวมและแยกตาม user สำหรับ trip_id ที่ระบุเท่านั้น"""
     try:
         res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
         expenses = res.data
@@ -330,16 +341,12 @@ def handle_text(event):
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
 
-    # =============================================================
-    # 0. เมนูหลัก
-    # =============================================================
+    # เมนูหลัก
     if text_lower in ["เมนู", "menu"]:
         send_menu(reply_token)
         return
 
-    # =============================================================
-    # 1. ยกเลิกโหมดแก้ไข
-    # =============================================================
+    # ยกเลิกโหมด
     if text_lower in ["ยกเลิก", "cancel"]:
         if user_id in user_state:
             del user_state[user_id]
@@ -348,27 +355,23 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีโหมดแก้ไขที่กำลังทำงานอยู่"))
         return
 
-    # =============================================================
-    # 2. จัดการแก้ไขยอด (edit) - รองรับลำดับที่ (seq_id) แทน id จริง
-    # =============================================================
+    # จัดการแก้ไขยอด (edit)
     if text_lower.startswith("edit"):
         trip = get_active_trip(user_id, group_id)
         if not trip:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         
-        expenses = get_all_expenses(trip['id'])  # มี seq_id แล้ว
+        expenses = get_all_expenses(trip['id'])
         if not expenses:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีรายการค่าใช้จ่ายให้แก้ไข"))
             return
         
-        # รองรับ inline: edit <seq_id> <amount>
         parts = text.split()
         if len(parts) >= 3:
             try:
                 seq_id = int(parts[1])
                 new_amount = float(parts[2].replace(',', ''))
-                # หา expense ที่มี seq_id ตรง
                 selected = next((e for e in expenses if e['seq_id'] == seq_id), None)
                 if selected and new_amount > 0:
                     if update_expense_amount(selected['id'], new_amount):
@@ -383,7 +386,6 @@ def handle_text(event):
             except:
                 pass
         
-        # ถ้าไม่ inline: แสดงรายการให้เลือกตาม seq_id
         if user_id in user_state:
             del user_state[user_id]
         
@@ -400,7 +402,6 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
-    # รับการเลือกแก้ไขแบบ step (พิมพ์เลขลำดับ)
     if user_id in user_state and user_state[user_id].get("action") == "edit_selection":
         expenses = user_state[user_id]["expenses"]
         try:
@@ -425,7 +426,6 @@ def handle_text(event):
             del user_state[user_id]
         return
     
-    # รับจำนวนเงินใหม่
     if user_id in user_state and user_state[user_id].get("action") == "edit_amount":
         try:
             new_amount = float(text.replace(',', ''))
@@ -447,9 +447,7 @@ def handle_text(event):
         del user_state[user_id]
         return
 
-    # =============================================================
-    # 3. id
-    # =============================================================
+    # id
     if text_lower == "id":
         msg = f"🔑 [LINE ID Info]\n\n👤 User ID (ของคุณ):\n{user_id}"
         if group_id:
@@ -457,21 +455,15 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
-    # =============================================================
-    # 4. สร้างทริป - ปุ่ม "ทริป" จะให้พิมพ์ชื่อทริป
-    # =============================================================
+    # สร้างทริป (แก้ไขการตัดชื่อ)
     if text_lower in ["ทริป", "trip"]:
-        # กดปุ่มเฉยๆ ไม่มีชื่อ ให้ถามชื่อ
         line_bot_api.reply_message(reply_token, TextSendMessage(text="📝 พิมพ์ชื่อทริปที่ต้องการสร้าง เช่น 'ทริป ภูเก็ต'"))
         return
     
-    if text_lower.startswith("ทริป") or text_lower.startswith("trip"):
-        # มีการพิมพ์ "ทริป ชื่อ..."
-        if text_lower.startswith("ทริป"):
-            trip_name = text[3:].strip()
-        else:
-            trip_name = text[4:].strip()
-        
+    # ตรวจสอบว่าขึ้นต้นด้วย "ทริป " หรือ "trip " (มีช่องว่าง) เพื่อตัดชื่อ
+    create_trip_match = re.match(r'^(ทริป|trip)\s+(.+)$', text_lower, re.IGNORECASE)
+    if create_trip_match:
+        trip_name = create_trip_match.group(2).strip()
         if not trip_name:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป เช่น 'ทริป mujirock'"))
             return
@@ -494,9 +486,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ สร้างทริปไม่สำเร็จ กรุณาลองใหม่"))
         return
 
-    # =============================================================
-    # 5. ยอดรวม
-    # =============================================================
+    # ยอดรวม
     if text_lower in ["ยอด", "sum"]:
         trip = get_active_trip(user_id, group_id)
         if not trip:
@@ -515,9 +505,7 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
-    # =============================================================
-    # 6. จบทริป - ตรวจสอบให้แน่ใจว่ารับตัวเลขได้
-    # =============================================================
+    # จบทริป
     if text_lower in ["จบทริป", "end trip"]:
         trip = get_active_trip(user_id, group_id)
         if not trip:
@@ -528,9 +516,7 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ (มากกว่า 0):"))
         return
 
-    # รับจำนวนคน (รองรับตัวเลข)
     if user_id in user_state and user_state[user_id].get("action") == "end_trip":
-        # ตรวจสอบว่าข้อความที่รับมาเป็นตัวเลขเท่านั้น
         if not text.isdigit():
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
             return
@@ -558,7 +544,6 @@ def handle_text(event):
         for uid, amt in user_totals.items():
             name = get_display_name(uid, group_id)
             diff = amt - avg
-            # แก้ไข: diff > 0 แสดงว่าจ่ายเกิน -> รับคืน, diff < 0 แสดงว่าจ่ายน้อย -> จ่ายเพิ่ม
             if diff > 0:
                 msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
             elif diff < 0:
@@ -571,9 +556,7 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
-    # =============================================================
-    # 7. บันทึกค่าใช้จ่ายด้วยข้อความ
-    # =============================================================
+    # บันทึกค่าใช้จ่ายด้วยข้อความ
     if not text_lower.startswith(("ทริป", "trip", "ยอด", "sum", "จบทริป", "end", "id", "event", "stop", "edit", "เมนู", "menu", "ยกเลิก", "cancel")):
         trip = get_active_trip(user_id, group_id)
         if trip:
@@ -593,13 +576,10 @@ def handle_text(event):
                     logger.error(f"Save expense error: {e}")
                 return
 
-    # =============================================================
-    # 8. event & stop event (คงเดิม)
-    # =============================================================
+    # event & stop event
     if text_lower == "event":
         events = get_active_events()
         base_url = "https://line-chat-bot-trip-manager.onrender.com"
-        
         if not events:
             msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่ (หรือทุกงานหมดอายุ/ถูกปิดแล้ว)\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n" + base_url
         else:
@@ -607,7 +587,6 @@ def handle_text(event):
             for i, e in enumerate(events, 1):
                 msg += f"{i}. งาน: {e.get('name', '-')}\n⏰ เวลาขาย: {e.get('saleTime', '-')}\n🔗 ลิงก์งาน: {e.get('url', '-')}\n-----------------------\n"
             msg += f"\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
-        
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
@@ -616,13 +595,11 @@ def handle_text(event):
         if not events:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี Event ที่กำลังทำงานอยู่"))
             return
-        
         user_state[user_id] = {"action": "stop_event", "events": events}
         msg = "🚫 เลือกหมายเลข Event ที่คุณต้องการสั่งหยุดทำงาน (Stop):\n=======================\n"
         for i, e in enumerate(events, 1):
             msg += f"{i}. งาน: {e.get('name', '-')}\n🛑 (ID ย่อ: {e.get('id', '-')})\n-----------------------\n"
         msg += "👉 พิมพ์เฉพาะ [ตัวเลขลำดับ] เพื่อระบุเลือกปิดงานชิ้นนั้นได้เลยครับ"
-        
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
@@ -647,7 +624,7 @@ def handle_text(event):
         return
 
 # =============================================================
-# 9. รองรับรูปภาพสลิป/บิล
+# รองรับรูปภาพสลิป/บิล
 # =============================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token):
     try:
@@ -674,7 +651,6 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
             }).execute()
             
             new_id = result.data[0]['id'] if result.data else None
-            # หา seq_id ล่าสุด (จำนวนรายการในทริปนี้)
             expenses = get_all_expenses(trip_id)
             seq_id = len(expenses)
             
