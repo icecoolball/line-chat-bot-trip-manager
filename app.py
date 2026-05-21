@@ -55,22 +55,25 @@ def save_showtime(showtime_data):
 
 def sort_showtime_by_time(schedule):
     """เรียง showtime ตาม time จากน้อย > มาก
-    Convert HH:MM to minutes แล้วเรียง ถ้ามี 00:00 (เที่ยงคืน) ให้อยู่ท้ายสุด
+    รองรับ: 09:00 วันนี้ < 23:50 วันนี้ < 00:00 วันหน้า < 08:59 วันหน้า
+    Logic: ถ้า time < 09:00 ให้บวก 24*60 (ถือว่าเป็นวันหน้า)
     """
-    def time_to_minutes(time_str):
-        """Convert 'HH:MM-HH:MM' to minutes of first time"""
+    def time_to_sort_key(time_str):
+        """Convert 'HH:MM-HH:MM' to sort key
+        ถ้า HH < 09:00 (เช่น 00:00-08:59) ถือว่าเป็นวันหน้า +1440 minutes
+        """
         try:
             start_time = time_str.split('-')[0]
             h, m = map(int, start_time.split(':'))
             minutes = h * 60 + m
-            # เที่ยงคืน (00:xx) ถ่อว่าเป็น 24:xx สำหรับการเรียง
-            if h == 0:
+            # ถ้าเวลา < 09:00 ถือว่าเป็นวันหน้า (บวก 24 ชั่วโมง)
+            if h < 9:
                 minutes += 24 * 60
             return minutes
         except:
             return 0
     
-    return sorted(schedule, key=lambda x: time_to_minutes(x.get("time", "00:00")))
+    return sorted(schedule, key=lambda x: time_to_sort_key(x.get("time", "00:00")))
 
 def format_showtime_message():
     """สร้าง message แสดง showtime ที่เก็บไว้ (เรียงตาม time)"""
@@ -498,25 +501,23 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
-    # save: บันทึก showtime แล้ว resume สลิป
+    # save: บันทึก showtime (ถ้ามี temp) แล้ว resume สลิป + ออกจาก function
     if text_lower == "save":
         if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
-            # ถ้ามีข้อมูล showtime ที่กำลังหยุด
+            # ถ้ามี showtime_temp ให้บันทึก
             if user_state[user_id].get("showtime_temp"):
                 existing = load_showtime()
-                # [Fix 1]: Sort ก่อนบันทึก
                 sorted_schedule = sort_showtime_by_time(user_state[user_id]["showtime_temp"])
                 existing["schedule"] = sorted_schedule
                 existing["last_updated"] = datetime.now().isoformat()
                 save_showtime(existing)
-                del user_state[user_id]
-                # [Fix 2]: ชัดเจน resume สลิป
-                line_bot_api.reply_message(reply_token, TextSendMessage(
-                    text="✅ บันทึก Showtime เสร็จ!\n\n"
-                         "📸 ตอนนี้สลิปทำงานปกติแล้ว สามารถส่งรูปบิลเพื่อบันทึกยอดเงินได้"
-                ))
-            else:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ยังไม่มีข้อมูล Showtime ให้บันทึก"))
+            
+            # ออกจาก showtime_mode
+            del user_state[user_id]
+            line_bot_api.reply_message(reply_token, TextSendMessage(
+                text="✅ บันทึก Showtime เสร็จ!\n\n"
+                     "📸 ตอนนี้สลิปทำงานปกติแล้ว สามารถส่งรูปบิลเพื่อบันทึกยอดเงินได้"
+            ))
         else:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่ได้อยู่ในโหมด Showtime"))
         return
@@ -578,19 +579,51 @@ def handle_text(event):
             return
 
     # =============================================================
-    # 0. เมนูหลัก
+    # 0. เมนู: เมนูหลัก หรือ เมนู showtime ถ้าอยู่ใน showtime_mode
     # =============================================================
     if text == "เมนู" or text_lower == "menu":
-        send_menu(reply_token)
+        # ถ้าอยู่ใน showtime_mode ให้แสดง help เฉพาะ showtime commands
+        if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+            msg = "📋 **Showtime Commands:**\n\n"
+            msg += "📺 **showtime** - แสดง Showtime ล่าสุด\n"
+            msg += "✏️ **update showtime** - แก้ไข Showtime (พิมพ์หรือส่งรูป)\n"
+            msg += "✏️ **editshowtime** - แก้ไข Showtime\n"
+            if user_state[user_id].get("edit_mode"):
+                msg += "📝 **HH:MM-HH:MM ศิลปิน** - เพิ่ม/แก้ไข Showtime\n"
+            msg += "💾 **save** - บันทึก Showtime และออกจาก Function\n"
+            msg += "❌ **ยกเลิก** - ออกจากโหมด Showtime\n"
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        else:
+            # เมนูหลัก
+            send_menu(reply_token)
         return
 
     # =============================================================
-    # 1. ยกเลิกโหมดแก้ไข (รองรับทั้ง ยกเลิก และ cancel) - ตัวเล็กตัวใหญ่ได้ทั้งหมด
+    # 0.5 Showtime Mode Guard: ถ้าอยู่ใน showtime_mode → บล็อก command อื่น
     # =============================================================
+    if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+        # อนุญาตแค่ showtime commands
+        if not (text_lower == "save" or 
+                text_lower == "showtime" or 
+                text_lower == "editshowtime" or 
+                text_lower == "update showtime" or
+                text == "เมนู" or text_lower == "menu" or
+                text == "ยกเลิก" or text_lower == "cancel" or
+                (user_state[user_id].get("edit_mode") and re.match(r'^(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+)$', text))):
+            line_bot_api.reply_message(reply_token, TextSendMessage(
+                text="⏸️ ตอนนี้อยู่ในโหมด Showtime\n\n"
+                     "อนุญาตแค่: showtime, editshowtime, update showtime, save, menu, ยกเลิก\n\n"
+                     "พิมพ์ 'menu' เพื่อดูคำสั่ง Showtime"
+            ))
+            return
     if text == "ยกเลิก" or text_lower == "cancel":
         if user_id in user_state:
-            del user_state[user_id]
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมดแก้ไขเรียบร้อย"))
+            if user_state[user_id].get("action") == "showtime_mode":
+                del user_state[user_id]
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมด Showtime เรียบร้อย"))
+            else:
+                del user_state[user_id]
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมดแก้ไขเรียบร้อย"))
         else:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีโหมดแก้ไขที่กำลังทำงานอยู่"))
         return
