@@ -231,57 +231,48 @@ def send_menu(reply_token):
 
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: ปรับปรุงฟังก์ชันดึงจำนวนเงิน (OCR) ให้แม่นยำขึ้น
-# - หาบรรทัดที่มี "จำนวน:" หรือ "ยอดรวม" แล้วดึงตัวเลขถัดไป
-# - กรองเลขบัญชี (ยาวเกิน 8 หลักหรือเป็นเลขบัญชี 10-12 หลัก)
+# - สแกนหาบรรทัดที่มีคำว่า 'จำนวนเงิน' หรือ 'จำนวน' เพื่อเจาะจงเจอยอดโอนแทนเลขทำรายการ
+# - กรองเอาเฉพาะตัวเลขที่มีคำว่า 'บาท' ต่อท้าย หรือบรรทัดที่ระบุชัดเจนเพื่อป้องกันสับสนกับเลขที่รายการ/เลขบัญชี
 # =================================================================
 def extract_amount(text):
     if not text:
         return None
     
-    lines = text.split('\n')
-    # มองหาบรรทัดที่มีคำว่า "จำนวน" หรือ "ยอดรวม" หรือ "total"
-    amount_line = None
+    lines = [line.strip().replace(' ', '') for line in text.split('\n') if line.strip()]
+    
+    # วนลูปหาเจาะจงเป้าหมาย 'จำนวนเงิน' หรือ 'จำนวน' หรือ 'ยอดรวม' หรือ 'total'
     for i, line in enumerate(lines):
         lower_line = line.lower()
-        if 'จำนวน' in lower_line or 'ยอดรวม' in lower_line or 'total' in lower_line:
-            amount_line = line
-            # ถ้ามีเครื่องหมาย : ให้ดูบรรทัดถัดไปด้วย
-            if ':' in line and i+1 < len(lines):
-                next_line = lines[i+1]
-                # ถ้าบรรทัดถัดไปมีตัวเลข ให้รวมกัน
-                if re.search(r'\d', next_line):
-                    amount_line = line + ' ' + next_line
-            break
-    
-    if amount_line:
-        # หาตัวเลขในบรรทัดนั้น (รวมทศนิยม)
-        numbers = re.findall(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', amount_line)
-        for num_str in numbers:
-            try:
-                num = float(num_str.replace(',', ''))
-                # ตัดเลขที่ยาวเกินไป (เลขบัญชี) และเลขต่ำกว่า 10
-                if 10 <= num <= 10000000 and len(str(int(num))) <= 8:
-                    logger.info(f"Found amount from amount line: {num}")
-                    return num
-            except:
-                continue
-    
-    # ถ้าไม่เจอ ให้หาทุกตัวเลขในข้อความ
-    all_numbers = re.findall(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', text)
-    valid = []
-    for num_str in all_numbers:
-        try:
-            num = float(num_str.replace(',', ''))
-            if 10 <= num <= 10000000 and len(str(int(num))) <= 8:
-                valid.append(num)
-        except:
-            continue
-    
-    if not valid:
-        return None
-    
-    # เลือกค่าที่มากที่สุด (มักเป็นยอดรวม)
-    return max(valid)
+        if any(k in lower_line for k in ['จำนวนเงิน', 'จำนวน', 'ยอดรวม', 'total', 'amt']):
+            # ค้นหาตัวเลขในบรรทัดนั้นหรือบรรทัดถัดไปทันที
+            search_zone = line
+            if i + 1 < len(lines):
+                search_zone += " " + lines[i+1]
+            
+            # ดึงเฉพาะตัวเลขที่มีรูปแบบทศนิยมหรือค่าเงิน
+            match = re.search(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', search_zone)
+            if match:
+                try:
+                    num = float(match.group(1).replace(',', ''))
+                    if 10 <= num <= 500000:
+                        logger.info(f"Matched targeted amount: {num}")
+                        return num
+                except:
+                    continue
+
+    # หากลยุทธ์สำรอง มองหาตัวเลขที่ระบุหน่วยชัดเจนว่า 'บาท' หรือ 'thb'
+    for line in lines:
+        if 'บาท' in line or 'thb' in line.lower():
+            match = re.search(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', line)
+            if match:
+                try:
+                    num = float(match.group(1).replace(',', ''))
+                    if 10 <= num <= 500000:
+                        return num
+                except:
+                    continue
+
+    return None
 
 def parse_expense_text(text):
     parts = text.split()
@@ -341,6 +332,47 @@ def handle_text(event):
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
 
+    # 1. เช็คสเตตัสกรอกจำนวนคนของกรุ๊ป/ผู้ใช้คนนั้นก่อน เพื่อป้องกันโดนดักด้วยเงื่อนไขอื่นด้านล่าง
+    if user_id in user_state and user_state[user_id].get("action") == "end_trip":
+        if not text.isdigit():
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
+            return
+        
+        try:
+            num_people = int(text)
+            if num_people <= 0:
+                raise ValueError
+        except:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
+            return
+        
+        trip_id = user_state[user_id]["trip_id"]
+        trip_title = user_state[user_id]["trip_title"]
+        total, user_totals = get_total_expenses(trip_id)
+        
+        if total == 0:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
+            del user_state[user_id]
+            return
+        
+        avg = total / num_people
+        msg = f"🚀 ทริป: {trip_title}\n📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n👥 จำนวนคน: {num_people}\n\n💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
+        
+        for uid, amt in user_totals.items():
+            name = get_display_name(uid, group_id)
+            diff = amt - avg
+            if diff > 0:
+                msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
+            elif diff < 0:
+                msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
+            else:
+                msg += f"• {name}: เรียบร้อยแล้ว\n"
+        
+        supabase.table("trips").update({"status": "closed"}).eq("id", trip_id).execute()
+        del user_state[user_id]
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
     # เมนูหลัก
     if text_lower in ["เมนู", "menu"]:
         send_menu(reply_token)
@@ -350,9 +382,9 @@ def handle_text(event):
     if text_lower in ["ยกเลิก", "cancel"]:
         if user_id in user_state:
             del user_state[user_id]
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมดแก้ไขเรียบร้อย"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมดเรียบร้อย"))
         else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีโหมดแก้ไขที่กำลังทำงานอยู่"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีโหมดที่กำลังทำงานอยู่"))
         return
 
     # จัดการแก้ไขยอด (edit)
@@ -514,46 +546,6 @@ def handle_text(event):
         
         user_state[user_id] = {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title']}
         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ (มากกว่า 0):"))
-        return
-
-    if user_id in user_state and user_state[user_id].get("action") == "end_trip":
-        if not text.isdigit():
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
-            return
-        
-        try:
-            num_people = int(text)
-            if num_people <= 0:
-                raise ValueError
-        except:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
-            return
-        
-        trip_id = user_state[user_id]["trip_id"]
-        trip_title = user_state[user_id]["trip_title"]
-        total, user_totals = get_total_expenses(trip_id)
-        
-        if total == 0:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
-            del user_state[user_id]
-            return
-        
-        avg = total / num_people
-        msg = f"🚀 ทริป: {trip_title}\n📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n👥 จำนวนคน: {num_people}\n\n💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
-        
-        for uid, amt in user_totals.items():
-            name = get_display_name(uid, group_id)
-            diff = amt - avg
-            if diff > 0:
-                msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
-            elif diff < 0:
-                msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
-            else:
-                msg += f"• {name}: เรียบร้อยแล้ว\n"
-        
-        supabase.table("trips").update({"status": "closed"}).eq("id", trip_id).execute()
-        del user_state[user_id]
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
     # บันทึกค่าใช้จ่ายด้วยข้อความ
