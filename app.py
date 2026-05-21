@@ -284,7 +284,7 @@ def send_menu(reply_token):
 # =================================================================
 def extract_showtime(text):
     """ดึงเวลา และ ชื่อศิลปินจาก OCR text
-    Pattern: ศิลปิน + เวลา หรือ เวลา + ศิลปิน
+    รองรับ: บน/ซ้าย/ล่าง/ในบรรทัดเดียว + layout 3 column
     Return: list of {"time": "12:20-12:50", "artist": "SIFER"}
     """
     if not text:
@@ -308,25 +308,44 @@ def extract_showtime(text):
         # Priority 1: ศิลปิน อยู่ในบรรทัดเดียวกัน (before หรือ after เวลา)
         # เช่น "SIFER 12:20-12:50" หรือ "12:20-12:50 SIFER"
         line_without_time = re.sub(time_pattern, '', line).strip()
-        if line_without_time and len(line_without_time) > 2:
+        # ลบ emoji/symbol ที่อาจมากับ
+        line_without_time = re.sub(r'^[⏱️🎤📋✏️🎵]+\s*', '', line_without_time).strip()
+        if line_without_time and len(line_without_time) > 1:
             artist = line_without_time
         
-        # Priority 2: ศิลปิน อยู่บรรทัดก่อนหน้า (ด้านบน)
-        if not artist and i > 0:
-            prev_line = lines[i-1]
-            if not re.search(time_pattern, prev_line) and len(prev_line) > 2:
-                artist = prev_line
+        # Priority 2: ศิลปิน อยู่บรรทัดก่อนหน้า (ด้านบน) — ข้ามบรรทัดที่เป็นเวลา/emoji เท่านั้น
+        if not artist:
+            for j in range(i-1, max(i-3, -1), -1):  # ค้นหาย้อนหลัง 2-3 บรรทัด
+                prev_line = lines[j].strip()
+                # ข้ามเวลา emoji ตัวเลขเดี่ยว
+                if re.search(time_pattern, prev_line) or re.match(r'^[\d\s\-:.\-–]+$', prev_line):
+                    continue
+                # ลบ emoji
+                prev_line_clean = re.sub(r'^[⏱️🎤📋✏️🎵]+\s*', '', prev_line).strip()
+                if prev_line_clean and len(prev_line_clean) > 1:
+                    artist = prev_line_clean
+                    break
         
         # Priority 3: ศิลปิน อยู่บรรทัดถัดไป (ด้านล่าง)
-        if not artist and i < len(lines) - 1:
-            next_line = lines[i+1]
-            if not re.search(time_pattern, next_line) and len(next_line) > 2:
-                artist = next_line
+        if not artist:
+            for j in range(i+1, min(i+3, len(lines))):  # ค้นหาข้างหน้า 2-3 บรรทัด
+                next_line = lines[j].strip()
+                # ข้ามเวลา emoji ตัวเลขเดี่ยว
+                if re.search(time_pattern, next_line) or re.match(r'^[\d\s\-:.\-–]+$', next_line):
+                    continue
+                # ลบ emoji
+                next_line_clean = re.sub(r'^[⏱️🎤📋✏️🎵]+\s*', '', next_line).strip()
+                if next_line_clean and len(next_line_clean) > 1:
+                    artist = next_line_clean
+                    break
         
-        if artist:
-            showtime_list.append({"time": time_str, "artist": artist})
+        # Priority 4: ถ้ายังหาไม่เจอ ใช้ "Unknown"
+        if not artist:
+            artist = "Unknown"
+        
+        showtime_list.append({"time": time_str, "artist": artist})
     
-    logger.info(f"Showtime extracted: {showtime_list}")
+    logger.info(f"Showtime extracted ({len(showtime_list)} entries): {showtime_list}")
     return showtime_list
 
 # =================================================================
@@ -483,10 +502,51 @@ def handle_text(event):
             return
         msg = "✏️ แก้ไข Showtime\n"
         msg += format_showtime_message()
-        msg += "\n\n📸 ส่งรูป Showtime ใหม่ (bot จะหยุดรับสลิปชั่วคราว)"
-        user_state[user_id] = {"action": "showtime_mode"}
+        msg += "\n\n📸 ส่งรูป Showtime ใหม่ หรือ 📝 พิมพ์เพื่อเพิ่ม/แก้เฉพาะศิลปิน"
+        msg += "\n👉 เช่น: 13:00-13:50 ROMANCE (ถ้ามีแล้วจะแทนที่)"
+        user_state[user_id] = {"action": "showtime_mode", "edit_mode": True}
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
+    
+    # [Showtime fix]: รับข้อมูล showtime จากการพิมพ์ (เช่น "13:00-13:50 ROMANCE")
+    if user_id in user_state and user_state[user_id].get("action") == "showtime_mode" and \
+       user_state[user_id].get("edit_mode"):
+        # ตรวจ pattern HH:MM-HH:MM ศิลปิน
+        time_pattern_input = r'^(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+)$'
+        match = re.match(time_pattern_input, text)
+        if match:
+            time_input = f"{match.group(1)}-{match.group(2)}".replace('.', ':')
+            artist_input = match.group(3).strip()
+            
+            existing = load_showtime()
+            schedule = existing.get("schedule", [])
+            
+            # หาและแทนที่ หรือเพิ่มใหม่
+            found = False
+            for item in schedule:
+                if item["time"] == time_input:
+                    item["artist"] = artist_input
+                    found = True
+                    break
+            if not found:
+                schedule.append({"time": time_input, "artist": artist_input})
+            
+            existing["schedule"] = schedule
+            existing["last_updated"] = datetime.now().isoformat()
+            save_showtime(existing)
+            
+            msg = "✅ อัปเดต Showtime เสร็จ!\n\n"
+            msg += format_showtime_message()
+            msg += "\n\n📝 พิมพ์เพิ่มเติม หรือ 'save' เพื่อสิ้นสุดการแก้ไข"
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+            return
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(
+                text="⚠️ Format ไม่ถูกต้อง\n\n"
+                     "👉 ตัวอย่าง: 13:00-13:50 ROMANCE\n"
+                     "👉 หรือส่งรูป Showtime ใหม่"
+            ))
+            return
 
     # =============================================================
     # 0. เมนูหลัก
@@ -909,16 +969,36 @@ def handle_image(event):
             showtime_list = extract_showtime(text_detected)
             
             if showtime_list:
-                # เก็บไว้ใน state ชั่วคราว รอ user พิมพ์ save
-                user_state[user_id]["showtime_temp"] = showtime_list
-                msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n"
-                msg += format_showtime_message().replace("ℹ️ ยังไม่มี", "📋 Showtime").replace("schedule", "showtime_temp")
-                
-                # rebuild message จาก temp
-                msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 **ตารางการแสดง:**\n\n"
-                for item in showtime_list:
-                    msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
-                msg += "\n👉 พิมพ์ 'save' เพื่อบันทึก"
+                if user_state[user_id].get("edit_mode"):
+                    # [Showtime fix]: edit_mode → merge กับ existing schedule
+                    existing = load_showtime()
+                    schedule = existing.get("schedule", [])
+                    
+                    # merge: update หรือ append
+                    for new_item in showtime_list:
+                        found = False
+                        for i, old_item in enumerate(schedule):
+                            if old_item["time"] == new_item["time"]:
+                                schedule[i] = new_item
+                                found = True
+                                break
+                        if not found:
+                            schedule.append(new_item)
+                    
+                    existing["schedule"] = schedule
+                    existing["last_updated"] = datetime.now().isoformat()
+                    save_showtime(existing)
+                    
+                    msg = "✅ อัปเดต Showtime เสร็จ!\n\n"
+                    msg += format_showtime_message()
+                    msg += "\n\n📝 พิมพ์เพิ่มเติม หรือ 'save' เพื่อสิ้นสุดการแก้ไข"
+                else:
+                    # [Showtime fix]: normal mode → เก็บไว้ใน state ชั่วคราว รอ user พิมพ์ save
+                    user_state[user_id]["showtime_temp"] = showtime_list
+                    msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 **ตารางการแสดง:**\n\n"
+                    for item in showtime_list:
+                        msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
+                    msg += "\n👉 พิมพ์ 'save' เพื่อบันทึก"
                 
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             else:
