@@ -53,14 +53,35 @@ def save_showtime(showtime_data):
     with open(SHOWTIME_FILE, "w", encoding="utf-8") as f:
         json.dump(showtime_data, f, ensure_ascii=False, indent=2)
 
+def sort_showtime_by_time(schedule):
+    """เรียง showtime ตาม time จากน้อย > มาก
+    Convert HH:MM to minutes แล้วเรียง ถ้ามี 00:00 (เที่ยงคืน) ให้อยู่ท้ายสุด
+    """
+    def time_to_minutes(time_str):
+        """Convert 'HH:MM-HH:MM' to minutes of first time"""
+        try:
+            start_time = time_str.split('-')[0]
+            h, m = map(int, start_time.split(':'))
+            minutes = h * 60 + m
+            # เที่ยงคืน (00:xx) ถ่อว่าเป็น 24:xx สำหรับการเรียง
+            if h == 0:
+                minutes += 24 * 60
+            return minutes
+        except:
+            return 0
+    
+    return sorted(schedule, key=lambda x: time_to_minutes(x.get("time", "00:00")))
+
 def format_showtime_message():
-    """สร้าง message แสดง showtime ที่เก็บไว้"""
+    """สร้าง message แสดง showtime ที่เก็บไว้ (เรียงตาม time)"""
     showtime = load_showtime()
     if not showtime.get("schedule"):
         return "ℹ️ ยังไม่มีข้อมูล Showtime"
     
+    # Sort ก่อนแสดง
+    sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
     msg = "📋 **ตารางการแสดง:**\n\n"
-    for item in showtime["schedule"]:
+    for item in sorted_schedule:
         time = item.get("time", "-")
         artist = item.get("artist", "-")
         msg += f"⏱️ {time} | 🎤 {artist}\n"
@@ -483,11 +504,17 @@ def handle_text(event):
             # ถ้ามีข้อมูล showtime ที่กำลังหยุด
             if user_state[user_id].get("showtime_temp"):
                 existing = load_showtime()
-                existing["schedule"] = user_state[user_id]["showtime_temp"]
+                # [Fix 1]: Sort ก่อนบันทึก
+                sorted_schedule = sort_showtime_by_time(user_state[user_id]["showtime_temp"])
+                existing["schedule"] = sorted_schedule
                 existing["last_updated"] = datetime.now().isoformat()
                 save_showtime(existing)
                 del user_state[user_id]
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ บันทึก Showtime เสร็จ! ตอนนี้สลิปทำงานปกติแล้ว"))
+                # [Fix 2]: ชัดเจน resume สลิป
+                line_bot_api.reply_message(reply_token, TextSendMessage(
+                    text="✅ บันทึก Showtime เสร็จ!\n\n"
+                         "📸 ตอนนี้สลิปทำงานปกติแล้ว สามารถส่งรูปบิลเพื่อบันทึกยอดเงินได้"
+                ))
             else:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ยังไม่มีข้อมูล Showtime ให้บันทึก"))
         else:
@@ -531,7 +558,9 @@ def handle_text(event):
             if not found:
                 schedule.append({"time": time_input, "artist": artist_input})
             
-            existing["schedule"] = schedule
+            # [Fix 1]: Sort ก่อนบันทึก
+            sorted_schedule = sort_showtime_by_time(schedule)
+            existing["schedule"] = sorted_schedule
             existing["last_updated"] = datetime.now().isoformat()
             save_showtime(existing)
             
@@ -985,7 +1014,9 @@ def handle_image(event):
                         if not found:
                             schedule.append(new_item)
                     
-                    existing["schedule"] = schedule
+                    # [Fix 1]: Sort ก่อนบันทึก
+                    sorted_schedule = sort_showtime_by_time(schedule)
+                    existing["schedule"] = sorted_schedule
                     existing["last_updated"] = datetime.now().isoformat()
                     save_showtime(existing)
                     
