@@ -1186,10 +1186,9 @@ def handle_text(event):
     
     # =============================================================
     # [แก้ไข 2026-05-22]: รับเลขเลือกทริปจากประวัติเพื่อ export
-    # ต้องวางก่อนส่วนบันทึกค่าใช้จ่าย เพื่อไม่ให้โดน intercept
+    # เพิ่ม log และใช้ push_message แทน reply_message
     # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "export_history":
-        # เช็คว่าพิมพ์ "excel" ตามด้วยตัวเลข เช่น "excel 1", "excel 2"
         parts = text_lower.split()
         if len(parts) == 2 and parts[0] == "excel":
             try:
@@ -1198,35 +1197,54 @@ def handle_text(event):
                 
                 if 0 <= choice < len(trips):
                     selected_trip = trips[choice]
+                    logger.info(f"[Export History] User {user_id} selected trip: {selected_trip['title']}")
                     
-                    # แสดงข้อความ "กำลังสร้าง..." เพื่อให้ user รู้ว่ากำลังทำงาน
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⏳ กำลังสร้าง Excel สำหรับทริป: {selected_trip['title']}..."))
-                    
+                    # สร้าง Excel
+                    logger.info(f"[Export History] Creating Excel for trip_id={selected_trip['id']}")
                     excel_buffer, error = export_trip_to_excel(selected_trip['id'], selected_trip['title'])
                     if error:
-                        line_bot_api.push_message(user_id, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
+                        logger.error(f"[Export History] Export error: {error}")
+                        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
                         del user_state[user_id]
                         return
                     
+                    # อัพโหลดขึ้น Supabase
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f"{selected_trip['title']}_{timestamp}.xlsx"
+                    logger.info(f"[Export History] Uploading to Supabase: {filename}")
                     public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
                     
                     if upload_error:
-                        line_bot_api.push_message(user_id, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
+                        logger.error(f"[Export History] Upload error: {upload_error}")
+                        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
                         del user_state[user_id]
                         return
                     
+                    logger.info(f"[Export History] Upload success, public_url: {public_url}")
+                    
+                    # สร้างข้อความตอบกลับ
                     msg = f"✅ สร้างไฟล์ Excel สำเร็จ!\n\n"
                     msg += f"📊 ทริป: {selected_trip['title']}\n"
                     msg += f"🔗 ลิงก์ดาวน์โหลด:\n{public_url}"
-                    line_bot_api.push_message(user_id, TextSendMessage(text=msg))
+                    
+                    # ใช้ push_message แทน reply_message (เพราะ reply_token อาจหมดอายุ)
+                    try:
+                        logger.info(f"[Export History] Sending message to user {user_id}")
+                        line_bot_api.push_message(user_id, TextSendMessage(text=msg))
+                        logger.info(f"[Export History] Message sent successfully")
+                    except Exception as e:
+                        logger.error(f"[Export History] push_message error: {e}")
+                        # Fallback เป็น reply_message ถ้า push_message ล้มเหลว
+                        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
                 else:
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ หมายเลขไม่ถูกต้อง (มี 1-{len(user_state[user_id]['trips'])})"))
                     return  # ไม่ลบ state ให้ user พิมพ์ใหม่ได้
             except ValueError:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ตัวเลขเท่านั้น เช่น excel 1"))
                 return  # ไม่ลบ state
+            except Exception as e:
+                logger.error(f"[Export History] Unexpected error: {e}", exc_info=True)
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ เกิดข้อผิดพลาด: {str(e)}"))
             
             del user_state[user_id]
             return
