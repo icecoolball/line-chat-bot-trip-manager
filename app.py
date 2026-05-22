@@ -159,22 +159,31 @@ def get_event_time():
     url = request.args.get("url", "")
     if not url:
         return jsonify({"ok": False, "error": "ไม่มี URL"}), 400
+    
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=10)
         html_text = resp.text
+        
+        # [แก้ไข 2026-05-21]: ลบช่องว่างส่วนเกิน และแก้คำผิด (กัน ยายน -> กันยายน)
         time_patterns = [
+            # Pattern 1: วันที่แบบภาษาไทย เช่น 15 กันยายน 2024
             r'(\d{1,2})\s+(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+(\d{3,4})',
+            
+            # Pattern 2: วันที่แบบตัวเลข เช่น 15/09/2024 10:00 หรือ 15-09-2024 10:00
             r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})',
         ]
+        
         matched_text = ""
         for pattern in time_patterns:
             match = re.search(pattern, html_text, re.IGNORECASE)
             if match:
                 matched_text = match.group(0)
                 break
+                
         return jsonify({"ok": True, "matchedText": matched_text})
     except Exception as e:
+        logger.error(f"Get event time error: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 # =================================================================
