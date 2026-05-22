@@ -314,11 +314,9 @@ def get_display_name(user_id, group_id=None):
 def get_all_expenses(trip_id):
     """ดึงรายการค่าใช้จ่ายทั้งหมดของทริป และเรียงตาม ID จากน้อยไปมาก"""
     try:
-        res = supabase.table("expenses").select("*").eq("trip_id", trip_id).execute()
-        expenses = res.data if res.data else []
-        # เรียงตาม id จากน้อยไปมาก (id เรียงตามเวลาที่เพิ่ม)
-        expenses.sort(key=lambda x: x['id'])
-        return expenses
+        # [แก้ไข 2026-05-22]: ใช้ .order() ใน query แทนการ sort ใน Python
+        res = supabase.table("expenses").select("*").eq("trip_id", trip_id).order("id", desc=False).execute()
+        return res.data if res.data else []
     except Exception as e:
         logger.error(f"Get all expenses error: {e}")
         return []
