@@ -34,47 +34,61 @@ vision_client = vision.ImageAnnotatorClient(credentials=creds)
 supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_ANON_KEY"))
 
 user_state = {}
-SCHEDULES_FILE = "schedules.local.json"
-SHOWTIME_FILE = "showtime.local.json"
+#SCHEDULES_FILE = "schedules.local.json"
+#SHOWTIME_FILE = "showtime.local.json"
 
 # =================================================================
-# [อัปเดตล่าสุด 2026-05-21]: ฟังก์ชัน Showtime Management
+# [อัปเดตล่าสุด 2026-05-22]: ฟังก์ชัน Showtime Management
 # ประกาศ state สำหรับควบคุมการทำงาน: active (ปกติ) / showtime_mode (หยุดสลิป)
 # =================================================================
 def load_showtime():
-    """โหลด showtime ล่าสุดจากไฟล์"""
-    if os.path.exists(SHOWTIME_FILE):
-        with open(SHOWTIME_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"schedule": [], "last_updated": None}
+    """ดึง showtime จาก Supabase แทนการอ่านไฟล์ JSON"""
+    try:
+        res = supabase.table("showtimes").select("*").execute()
+        schedule = res.data if res.data else []
+        return {"schedule": schedule, "last_updated": datetime.now().isoformat()}
+    except Exception as e:
+        logger.error(f"Load showtime error: {e}")
+        return {"schedule": [], "last_updated": None}
 
 def save_showtime(showtime_data):
-    """บันทึก showtime ลงไฟล์"""
-    with open(SHOWTIME_FILE, "w", encoding="utf-8") as f:
-        json.dump(showtime_data, f, ensure_ascii=False, indent=2)
+    """บันทึก showtime ลง Supabase (ลบของเก่าทั้งหมดแล้วเพิ่มใหม่)"""
+    try:
+        # ลบข้อมูลเก่าทั้งหมด (id เป็น SERIAL เริ่มต้นที่ 1 ดังนั้น neq 0 จะลบทุกแถว)
+        supabase.table("showtimes").delete().neq("id", 0).execute()
+        
+        # เพิ่มข้อมูลใหม่
+        schedule = showtime_data.get("schedule", [])
+        for item in schedule:
+            supabase.table("showtimes").insert({
+                "time": item.get("time", ""),
+                "artist": item.get("artist", "")
+            }).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Save showtime error: {e}")
+        return False
 
 def sort_showtime_by_time(schedule):
-    """เรียง showtime: 09:00-23:59 มาก่อน, แล้ว 00:00-08:59"""
+    """เรียง showtime: 09:00-23:59 มาก่อน, แล้ว 00:00-08:59 (คงเดิม)"""
     def get_sort_key(item):
         time_str = item.get("time", "00:00").split('-')[0]
         try:
             h, m = map(int, time_str.split(':'))
-            # ถ้า 00:00-08:59 ให้บวก 24 ชม. ไว้หลังสุด
             if 0 <= h < 9:
-                return (1, h * 60 + m)   # group 1 (หลัง)
+                return (1, h * 60 + m)
             else:
-                return (0, h * 60 + m)   # group 0 (หน้า)
+                return (0, h * 60 + m)
         except:
             return (2, 0)
     return sorted(schedule, key=get_sort_key)
 
 def format_showtime_message():
-    """สร้าง message แสดง showtime ที่เก็บไว้ (เรียงตาม time)"""
+    """สร้าง message แสดง showtime ที่เก็บไว้ (เรียงตาม time) (คงเดิม)"""
     showtime = load_showtime()
     if not showtime.get("schedule"):
         return "ℹ️ ยังไม่มีข้อมูล Showtime"
     
-    # Sort ก่อนแสดง
     sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
     msg = "📋 **ตารางการแสดง:**\n\n"
     for item in sorted_schedule:
@@ -82,19 +96,58 @@ def format_showtime_message():
         artist = item.get("artist", "-")
         msg += f"⏱️ {time} | 🎤 {artist}\n"
     return msg
-
+    
 # =================================================================
-# [อัปเดตล่าสุด 2026-05-21]: ฟังก์ชันโหลดและบันทึก schedules
+# [อัปเดตล่าสุด 2026-05-22]: ฟังก์ชันโหลดและบันทึก schedules
 # =================================================================
 def load_schedules():
-    if os.path.exists(SCHEDULES_FILE):
-        with open(SCHEDULES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+    """ดึง schedules จาก Supabase"""
+    try:
+        res = supabase.table("schedules").select("*").order("created_at", desc=True).execute()
+        return res.data if res.data else []
+    except Exception as e:
+        logger.error(f"Load schedules error: {e}")
+        return []
 
 def save_schedules(schedules):
-    with open(SCHEDULES_FILE, "w", encoding="utf-8") as f:
-        json.dump(schedules, f, ensure_ascii=False, indent=2)
+    """ไม่ใช้แล้ว - ใช้ insert/update/delete โดยตรงแทน"""
+    pass
+
+def add_schedule(data):
+    """เพิ่ม schedule ใหม่"""
+    try:
+        new_schedule = {
+            "target_id": data.get("targetId", ""),
+            "buyer_name": data.get("buyerName", ""),
+            "name": data.get("name", ""),
+            "url": data.get("url", ""),
+            "sale_time": data.get("saleTime", ""),
+            "site": data.get("site", ""),
+            "active": True
+        }
+        res = supabase.table("schedules").insert(new_schedule).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.error(f"Add schedule error: {e}")
+        return None
+
+def update_schedule_active(schedule_id, active):
+    """อัพเดทสถานะ active"""
+    try:
+        supabase.table("schedules").update({"active": active}).eq("id", schedule_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Update schedule error: {e}")
+        return False
+
+def delete_schedule_by_id(schedule_id):
+    """ลบ schedule"""
+    try:
+        supabase.table("schedules").delete().eq("id", schedule_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Delete schedule error: {e}")
+        return False
 
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: API ดึงเวลาเปิดขายจาก URL
@@ -151,42 +204,59 @@ def config_status():
     })
 
 # =================================================================
-# [อัปเดตล่าสุด 2026-05-21]: API จัดการ schedules (GET, POST, DELETE)
+# [อัปเดตล่าสุด 2026-05-22]: API จัดการ schedules (GET, POST, DELETE)
 # =================================================================
-@app.route("/api/schedules", methods=["GET", "POST"])
+@@app.route("/api/schedules", methods=["GET", "POST"])
 def handle_schedules():
     if request.method == "GET":
-        return jsonify({"ok": True, "schedules": load_schedules()})
+        schedules = load_schedules()
+        # แปลง field names ให้ตรงกับ frontend
+        formatted = []
+        for s in schedules:
+            formatted.append({
+                "id": str(s["id"]),
+                "targetId": s.get("target_id", ""),
+                "buyerName": s.get("buyer_name", ""),
+                "name": s.get("name", ""),
+                "url": s.get("url", ""),
+                "saleTime": s.get("sale_time", ""),
+                "site": s.get("site", ""),
+                "active": s.get("active", True),
+                "createdAt": s.get("created_at", "")
+            })
+        return jsonify({"ok": True, "schedules": formatted})
+    
     elif request.method == "POST":
         try:
             data = request.json
-            schedules = load_schedules()
-            new_id = str(len(schedules) + 1)
-            new_schedule = {
-                "id": new_id,
-                "targetId": data.get("targetId", ""),
-                "buyerName": data.get("buyerName", ""),
-                "name": data.get("name", ""),
-                "url": data.get("url", ""),
-                "saleTime": data.get("saleTime", ""),
-                "site": data.get("site", ""),
-                "reminders": [],
-                "active": True,
-                "createdAt": datetime.now().isoformat()
-            }
-            schedules.append(new_schedule)
-            save_schedules(schedules)
-            return jsonify({"ok": True, "schedule": new_schedule})
+            new_schedule = add_schedule(data)
+            if new_schedule:
+                # แปลง field names ให้ตรงกับ frontend
+                formatted = {
+                    "id": str(new_schedule["id"]),
+                    "targetId": new_schedule.get("target_id", ""),
+                    "buyerName": new_schedule.get("buyer_name", ""),
+                    "name": new_schedule.get("name", ""),
+                    "url": new_schedule.get("url", ""),
+                    "saleTime": new_schedule.get("sale_time", ""),
+                    "site": new_schedule.get("site", ""),
+                    "active": new_schedule.get("active", True),
+                    "createdAt": new_schedule.get("created_at", "")
+                }
+                return jsonify({"ok": True, "schedule": formatted})
+            else:
+                return jsonify({"ok": False, "error": "Failed to add schedule"}), 500
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/schedules/<schedule_id>", methods=["DELETE"])
 def delete_schedule(schedule_id):
     try:
-        schedules = load_schedules()
-        schedules = [s for s in schedules if s.get("id") != schedule_id]
-        save_schedules(schedules)
-        return jsonify({"ok": True})
+        success = delete_schedule_by_id(schedule_id)
+        if success:
+            return jsonify({"ok": True})
+        else:
+            return jsonify({"ok": False, "error": "Failed to delete"}), 500
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -962,13 +1032,11 @@ def handle_text(event):
             events = user_state[user_id]["events"]
             if 0 <= choice < len(events):
                 selected = events[choice]
-                schedules = load_schedules()
-                for s in schedules:
-                    if s.get('id') == selected.get('id'):
-                        s['active'] = False
-                        break
-                save_schedules(schedules)
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
+                # เปลี่ยนจาก save_schedules เป็น update_schedule_active
+                if update_schedule_active(selected.get('id'), False):
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
+                else:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ สั่งปิดงานไม่สำเร็จ"))
             else:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง กรุณาลองใหม่"))
         except:
