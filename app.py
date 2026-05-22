@@ -70,16 +70,18 @@ def save_showtime(showtime_data):
         return False
 
 def sort_showtime_by_time(schedule):
-    """เรียง showtime: 09:00-23:59 มาก่อน, แล้ว 00:00-08:59 (คงเดิม)"""
+    """เรียง showtime: 09:00-23:59 มาก่อน, แล้ว 00:00-08:59"""
     def get_sort_key(item):
         time_str = item.get("time", "00:00").split('-')[0]
         try:
             h, m = map(int, time_str.split(':'))
+            # ถ้า 00:00-08:59 ให้บวก 24 ชม. ไว้หลังสุด
             if 0 <= h < 9:
-                return (1, h * 60 + m)
+                return (1, h * 60 + m)   # group 1 (หลัง)
             else:
-                return (0, h * 60 + m)
-        except:
+                return (0, h * 60 + m)   # group 0 (หน้า)
+        except (ValueError, IndexError) as e:
+            logger.warning(f"Sort showtime parse error: {time_str} - {e}")
             return (2, 0)
     return sorted(schedule, key=get_sort_key)
 
@@ -302,13 +304,15 @@ def get_active_trip(user_id, group_id=None):
         return None
 
 def get_display_name(user_id, group_id=None):
+    """ดึงชื่อผู้ใช้จาก LINE API"""
     try:
         if group_id:
             profile = line_bot_api.get_group_member_profile(group_id, user_id)
         else:
             profile = line_bot_api.get_profile(user_id)
         return profile.display_name
-    except:
+    except Exception as e:
+        logger.error(f"Get display name error for user {user_id}: {e}")
         return user_id[:8]
 
 def get_all_expenses(trip_id):
@@ -923,23 +927,24 @@ def handle_text(event):
         try:
             num_people = int(text)
             if num_people <= 0:
-                raise ValueError
-        except:
+                raise ValueError("Number of people must be positive")
+        except ValueError as e:
+            logger.warning(f"End trip invalid input: {text} - {e}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
             return
-        
+    
         trip_id = user_state[user_id]["trip_id"]
         trip_title = user_state[user_id]["trip_title"]
         total, user_totals = get_total_expenses(trip_id)
-        
+    
         if total == 0:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
             del user_state[user_id]
             return
-        
+    
         avg = total / num_people
         msg = f"🚀 ทริป: {trip_title}\n📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n👥 จำนวนคน: {num_people}\n\n💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
-        
+    
         # [อัปเดตล่าสุด 2026-05-21]: แก้ไข logic การแสดงผล end trip
         # ถ้า diff > 0 แสดงว่าจ่ายเกิน → รับคืน, ถ้า diff < 0 จ่ายน้อย → จ่ายเพิ่ม
         for uid, amt in user_totals.items():
@@ -951,8 +956,12 @@ def handle_text(event):
                 msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
             else:
                 msg += f"• {name}: เรียบร้อยแล้ว\n"
-        
-        supabase.table("trips").update({"status": "closed"}).eq("id", trip_id).execute()
+    
+        try:
+            supabase.table("trips").update({"status": "closed"}).eq("id", trip_id).execute()
+        except Exception as e:
+            logger.error(f"Close trip error: {e}")
+    
         del user_state[user_id]
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
@@ -1030,15 +1039,21 @@ def handle_text(event):
             events = user_state[user_id]["events"]
             if 0 <= choice < len(events):
                 selected = events[choice]
-                # เปลี่ยนจาก save_schedules เป็น update_schedule_active
-                if update_schedule_active(selected.get('id'), False):
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
-                else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ สั่งปิดงานไม่สำเร็จ"))
+                schedules = load_schedules()
+                for s in schedules:
+                    if s.get('id') == selected.get('id'):
+                        s['active'] = False
+                        break
+                save_schedules(schedules)
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
             else:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง กรุณาลองใหม่"))
-        except:
+        except ValueError as e:
+            logger.warning(f"Stop event invalid input: {text_lower} - {e}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์หมายเลขเท่านั้น"))
+        except Exception as e:
+            logger.error(f"Stop event error: {e}")
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาด กรุณาลองใหม่"))
         del user_state[user_id]
         return
 
