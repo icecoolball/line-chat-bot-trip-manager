@@ -1186,7 +1186,7 @@ def handle_text(event):
     
     # =============================================================
     # [แก้ไข 2026-05-22]: รับเลขเลือกทริปจากประวัติเพื่อ export
-    # เพิ่ม log และใช้ push_message แทน reply_message
+    # ปรับปรุง error handling และใช้ reply_message แทน push_message
     # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "export_history":
         parts = text_lower.split()
@@ -1197,13 +1197,10 @@ def handle_text(event):
                 
                 if 0 <= choice < len(trips):
                     selected_trip = trips[choice]
-                    logger.info(f"[Export History] User {user_id} selected trip: {selected_trip['title']}")
                     
                     # สร้าง Excel
-                    logger.info(f"[Export History] Creating Excel for trip_id={selected_trip['id']}")
                     excel_buffer, error = export_trip_to_excel(selected_trip['id'], selected_trip['title'])
                     if error:
-                        logger.error(f"[Export History] Export error: {error}")
                         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
                         del user_state[user_id]
                         return
@@ -1211,31 +1208,17 @@ def handle_text(event):
                     # อัพโหลดขึ้น Supabase
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f"{selected_trip['title']}_{timestamp}.xlsx"
-                    logger.info(f"[Export History] Uploading to Supabase: {filename}")
                     public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
                     
                     if upload_error:
-                        logger.error(f"[Export History] Upload error: {upload_error}")
                         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
                         del user_state[user_id]
                         return
                     
-                    logger.info(f"[Export History] Upload success, public_url: {public_url}")
-                    
-                    # สร้างข้อความตอบกลับ
                     msg = f"✅ สร้างไฟล์ Excel สำเร็จ!\n\n"
                     msg += f"📊 ทริป: {selected_trip['title']}\n"
                     msg += f"🔗 ลิงก์ดาวน์โหลด:\n{public_url}"
-                    
-                    # ใช้ push_message แทน reply_message (เพราะ reply_token อาจหมดอายุ)
-                    try:
-                        logger.info(f"[Export History] Sending message to user {user_id}")
-                        line_bot_api.push_message(user_id, TextSendMessage(text=msg))
-                        logger.info(f"[Export History] Message sent successfully")
-                    except Exception as e:
-                        logger.error(f"[Export History] push_message error: {e}")
-                        # Fallback เป็น reply_message ถ้า push_message ล้มเหลว
-                        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
                 else:
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ หมายเลขไม่ถูกต้อง (มี 1-{len(user_state[user_id]['trips'])})"))
                     return  # ไม่ลบ state ให้ user พิมพ์ใหม่ได้
@@ -1243,15 +1226,15 @@ def handle_text(event):
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ตัวเลขเท่านั้น เช่น excel 1"))
                 return  # ไม่ลบ state
             except Exception as e:
-                logger.error(f"[Export History] Unexpected error: {e}", exc_info=True)
+                logger.error(f"Export history error: {e}")
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ เกิดข้อผิดพลาด: {str(e)}"))
             
             del user_state[user_id]
             return
         else:
             # ถ้าพิมพ์อย่างอื่นที่ไม่ใช่ "excel [เลข]" ให้ยกเลิก state
-            del user_state[user_id]
-        
+            del user_state[user_id] 
+            
     # =============================================================
     # 7. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
     # [แก้ไข 2026-05-22]: เพิ่ม "ประวัติ" และ "excel" ใน skip list
