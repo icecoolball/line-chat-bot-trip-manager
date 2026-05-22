@@ -170,25 +170,38 @@ def get_exchange_rate(from_currency, to_currency):
         logger.error(f"Get exchange rate error: {e}")
         return None
 # =================================================================
-# [เพิ่มใหม่ 2026-05-22]: Export Excel Functions
+# [แก้ไข 2026-05-22]: Export Excel Functions - แปลงเวลา UTC → ไทย
 # =================================================================
 def export_trip_to_excel(trip_id, trip_title):
-    """สร้างไฟล์ Excel จากข้อมูลทริป"""
+    """สร้างไฟล์ Excel จากข้อมูลทริป (เวลาไทย UTC+7)"""
     try:
-        # ดึงข้อมูล expenses ทั้งหมดของทริป
+        from datetime import timedelta
+        
         expenses = get_all_expenses(trip_id)
         if not expenses:
             return None, "ไม่มีข้อมูลค่าใช้จ่ายในทริปนี้"
         
-        # สร้างข้อมูลสำหรับ DataFrame
         data = []
         for exp in expenses:
             user_name = get_display_name(exp['line_user_id'], None)
             created = exp.get('created_at', '')
             
-            # แยกวันที่และเวลา
-            date_str = created[:10] if created else ''
-            time_str = created[11:19] if created else ''
+            # [แก้ไข]: แปลงเวลา UTC → เวลาไทย (UTC+7)
+            date_str = ''
+            time_str = ''
+            if created:
+                try:
+                    # ตัดเศษวินาทีและ timezone ออก แล้ว parse
+                    dt_str = created.replace('Z', '+00:00')
+                    dt = datetime.fromisoformat(dt_str)
+                    # บวก 7 ชั่วโมงเป็นเวลาไทย
+                    dt_thai = dt + timedelta(hours=7)
+                    date_str = dt_thai.strftime('%Y-%m-%d')
+                    time_str = dt_thai.strftime('%H:%M:%S')
+                except Exception as e:
+                    logger.warning(f"Parse datetime error: {created} - {e}")
+                    date_str = created[:10]
+                    time_str = created[11:19]
             
             data.append({
                 "ชื่อทริป": trip_title,
@@ -199,10 +212,7 @@ def export_trip_to_excel(trip_id, trip_title):
                 "จำนวนเงิน": exp.get('amount', 0)
             })
         
-        # สร้าง DataFrame
         df = pd.DataFrame(data)
-        
-        # สร้าง Excel ใน memory (ไม่ต้องบันทึกเป็นไฟล์)
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Expenses')
@@ -212,7 +222,7 @@ def export_trip_to_excel(trip_id, trip_title):
     except Exception as e:
         logger.error(f"Export Excel error: {e}")
         return None, str(e)
-
+        
 def upload_excel_to_supabase(file_buffer, filename):
     """อัพโหลดไฟล์ Excel ขึ้น Supabase Storage"""
     try:
@@ -1114,37 +1124,37 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     # =================================================================
-    # [เพิ่มใหม่ 2026-05-22]: Command Excel และ ประวัติ
+    # [แก้ไข 2026-05-22]: Command Excel และ ประวัติ
     # =================================================================
-
+    
     # =============================================================
-    # Export Excel ทริปปัจจุบัน
+    # Export Excel ทริปปัจจุบัน (พิมพ์แค่ "excel")
     # =============================================================
     if text_lower == "excel":
         trip = get_active_trip(user_id, group_id)
         if not trip:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
-    
+        
         excel_buffer, error = export_trip_to_excel(trip['id'], trip['title'])
         if error:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
             return
-    
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{trip['title']}_{timestamp}.xlsx"
         public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
-    
+        
         if upload_error:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
             return
-    
+        
         msg = f"✅ สร้างไฟล์ Excel สำเร็จ!\n\n"
         msg += f"📊 ทริป: {trip['title']}\n"
         msg += f"🔗 ลิงก์ดาวน์โหลด:\n{public_url}"
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
-
+    
     # =============================================================
     # ดูประวัติทริปทั้งหมด (Active + Closed)
     # =============================================================
@@ -1152,74 +1162,89 @@ def handle_text(event):
         try:
             res = supabase.table("trips").select("*").order("created_at", desc=True).limit(10).execute()
             all_trips = res.data if res.data else []
-        
+            
             if not all_trips:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ยังไม่มีประวัติทริป"))
                 return
-        
+            
             msg = "📜 **ประวัติทริป (10 ทริปล่าสุด):**\n\n"
             for i, trip in enumerate(all_trips, 1):
                 status_icon = "🟢" if trip['status'] == 'active' else "🔴"
                 start_date = trip.get('created_at', '')[:10]
                 end_date = trip.get('updated_at', '')[:10] if trip['status'] == 'closed' else "ยังไม่จบ"
-            
+                
                 msg += f"{i}. {status_icon} {trip['title']}\n"
                 msg += f"   📅 {start_date} → {end_date}\n"
                 msg += f"   👉 พิมพ์: excel {i}\n\n"
-        
+            
             user_state[user_id] = {"action": "export_history", "trips": all_trips}
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         except Exception as e:
             logger.error(f"History error: {e}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถดึงข้อมูลได้"))
         return
-
+    
     # =============================================================
-    # รับเลขเลือกทริปจากประวัติเพื่อ export
+    # [แก้ไข 2026-05-22]: รับเลขเลือกทริปจากประวัติเพื่อ export
+    # ต้องวางก่อนส่วนบันทึกค่าใช้จ่าย เพื่อไม่ให้โดน intercept
     # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "export_history":
-        try:
-            choice = int(text_lower) - 1
-            trips = user_state[user_id]["trips"]
-            if 0 <= choice < len(trips):
-                selected_trip = trips[choice]
+        # เช็คว่าพิมพ์ "excel" ตามด้วยตัวเลข เช่น "excel 1", "excel 2"
+        parts = text_lower.split()
+        if len(parts) == 2 and parts[0] == "excel":
+            try:
+                choice = int(parts[1]) - 1
+                trips = user_state[user_id]["trips"]
+                
+                if 0 <= choice < len(trips):
+                    selected_trip = trips[choice]
+                    
+                    # แสดงข้อความ "กำลังสร้าง..." เพื่อให้ user รู้ว่ากำลังทำงาน
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⏳ กำลังสร้าง Excel สำหรับทริป: {selected_trip['title']}..."))
+                    
+                    excel_buffer, error = export_trip_to_excel(selected_trip['id'], selected_trip['title'])
+                    if error:
+                        line_bot_api.push_message(user_id, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
+                        del user_state[user_id]
+                        return
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"{selected_trip['title']}_{timestamp}.xlsx"
+                    public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
+                    
+                    if upload_error:
+                        line_bot_api.push_message(user_id, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
+                        del user_state[user_id]
+                        return
+                    
+                    msg = f"✅ สร้างไฟล์ Excel สำเร็จ!\n\n"
+                    msg += f"📊 ทริป: {selected_trip['title']}\n"
+                    msg += f"🔗 ลิงก์ดาวน์โหลด:\n{public_url}"
+                    line_bot_api.push_message(user_id, TextSendMessage(text=msg))
+                else:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ หมายเลขไม่ถูกต้อง (มี 1-{len(user_state[user_id]['trips'])})"))
+                    return  # ไม่ลบ state ให้ user พิมพ์ใหม่ได้
+            except ValueError:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ตัวเลขเท่านั้น เช่น excel 1"))
+                return  # ไม่ลบ state
             
-                excel_buffer, error = export_trip_to_excel(selected_trip['id'], selected_trip['title'])
-                if error:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
-                    del user_state[user_id]
-                    return
-            
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"{selected_trip['title']}_{timestamp}.xlsx"
-                public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
-            
-                if upload_error:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
-                    del user_state[user_id]
-                    return
-            
-                msg = f"✅ สร้างไฟล์ Excel สำเร็จ!\n\n"
-                msg += f"📊 ทริป: {selected_trip['title']}\n"
-                msg += f"🔗 ลิงก์ดาวน์โหลด:\n{public_url}"
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
-            else:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง"))
-        except ValueError:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ตัวเลขเท่านั้น"))
-        del user_state[user_id]
-        return
-
+            del user_state[user_id]
+            return
+        else:
+            # ถ้าพิมพ์อย่างอื่นที่ไม่ใช่ "excel [เลข]" ให้ยกเลิก state
+            del user_state[user_id]
+        
     # =============================================================
     # 7. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
+    # [แก้ไข 2026-05-22]: เพิ่ม "ประวัติ" และ "excel" ใน skip list
     # [Showtime fix]: ถ้าอยู่ใน showtime_mode ให้บล็อกการบันทึกยอด
     # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
         # อยู่ในโหมด showtime → ไม่บันทึกยอด
         return
 
-    if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก")) and \
-       not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel")):
+    if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel")) and \
+       not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel")):
         trip = get_active_trip(user_id, group_id)
         if trip:
             name, item, amount = parse_expense_text(event.message.text.strip())
@@ -1237,7 +1262,7 @@ def handle_text(event):
                 except Exception as e:
                     logger.error(f"Save expense error: {e}")
                 return
-
+                
     # =============================================================
     # 8. พิมพ์ event - แสดง event ปัจจุบัน
     # =============================================================
