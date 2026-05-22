@@ -4,6 +4,11 @@ import json
 import logging
 import threading
 import requests
+# =================================================================
+# [เพิ่มใหม่ 2026-05-22]: Import สำหรับ Export Excel
+# =================================================================
+import pandas as pd
+from io import BytesIO
 from datetime import datetime
 from flask import Flask, request, abort, render_template, send_from_directory, jsonify
 from linebot import LineBotApi, WebhookHandler
@@ -150,7 +155,83 @@ def delete_schedule_by_id(schedule_id):
     except Exception as e:
         logger.error(f"Delete schedule error: {e}")
         return False
+# =================================================================
+# [เพิ่มใหม่ 2026-05-22]: Currency Converter
+# =================================================================
+def get_exchange_rate(from_currency, to_currency):
+    """ดึงอัตราแลกเปลี่ยนจาก API ฟรี"""
+    try:
+        url = f"https://api.exchangerate-api.com/v4/latest/{from_currency}"
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        rate = data.get("rates", {}).get(to_currency)
+        return rate
+    except Exception as e:
+        logger.error(f"Get exchange rate error: {e}")
+        return None
+# =================================================================
+# [เพิ่มใหม่ 2026-05-22]: Export Excel Functions
+# =================================================================
+def export_trip_to_excel(trip_id, trip_title):
+    """สร้างไฟล์ Excel จากข้อมูลทริป"""
+    try:
+        # ดึงข้อมูล expenses ทั้งหมดของทริป
+        expenses = get_all_expenses(trip_id)
+        if not expenses:
+            return None, "ไม่มีข้อมูลค่าใช้จ่ายในทริปนี้"
+        
+        # สร้างข้อมูลสำหรับ DataFrame
+        data = []
+        for exp in expenses:
+            user_name = get_display_name(exp['line_user_id'], None)
+            created = exp.get('created_at', '')
+            
+            # แยกวันที่และเวลา
+            date_str = created[:10] if created else ''
+            time_str = created[11:19] if created else ''
+            
+            data.append({
+                "ชื่อทริป": trip_title,
+                "วันที่": date_str,
+                "เวลา": time_str,
+                "ชื่อผู้จ่าย": user_name,
+                "รายการ": exp.get('item_name', ''),
+                "จำนวนเงิน": exp.get('amount', 0)
+            })
+        
+        # สร้าง DataFrame
+        df = pd.DataFrame(data)
+        
+        # สร้าง Excel ใน memory (ไม่ต้องบันทึกเป็นไฟล์)
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Expenses')
+        
+        output.seek(0)
+        return output, None
+    except Exception as e:
+        logger.error(f"Export Excel error: {e}")
+        return None, str(e)
 
+def upload_excel_to_supabase(file_buffer, filename):
+    """อัพโหลดไฟล์ Excel ขึ้น Supabase Storage"""
+    try:
+        # อัพโหลดไฟล์ไปยัง bucket 'trip-exports'
+        supabase.storage.from_("trip-exports").upload(
+            path=filename,
+            file=file_buffer.getvalue(),
+            file_options={
+                "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "upsert": "true"  # ถ้ามีไฟล์ชื่อเดียวกันให้ทับ
+            }
+        )
+        
+        # สร้าง public URL สำหรับดาวน์โหลด
+        public_url = supabase.storage.from_("trip-exports").get_public_url(filename)
+        return public_url, None
+    except Exception as e:
+        logger.error(f"Upload to Supabase Storage error: {e}")
+        return None, str(e)
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: API ดึงเวลาเปิดขายจาก URL
 # =================================================================
@@ -917,62 +998,216 @@ def handle_text(event):
         return
 
     # =============================================================
-    # 6. พิมพ์ จบทริป หรือ end trip - ปิดทริปและคำนวณหาร
+    # 6. พิมพ์ จบทริป หรือ end trip - ปิดทริปและคำนวณหาร (รองรับ Currency)
+    # [อัปเดตล่าสุด 2026-05-22]: เพิ่มการแปลงสกุลเงิน เช่น จบทริป JPY
     # =============================================================
-    if text == "จบทริป" or text_lower == "end trip":
+    if text.startswith("จบทริป") or text_lower.startswith("end trip"):
         trip = get_active_trip(user_id, group_id)
         if not trip:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
-        
-        user_state[user_id] = {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title']}
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
+    
+        # ดึง currency code จาก command (เช่น "จบทริป JPY" หรือ "end trip USD")
+        currency_code = "THB"
+        if text.startswith("จบทริป"):
+            parts = text.split()
+            if len(parts) >= 2:
+                currency_code = parts[1].upper()
+        elif text_lower.startswith("end trip"):
+            parts = text_lower.split()
+            if len(parts) >= 3:
+                currency_code = parts[2].upper()
+    
+        # เก็บ state ไว้รอจำนวนคน
+        user_state[user_id] = {
+            "action": "end_trip",
+            "trip_id": trip['id'],
+            "trip_title": trip['title'],
+            "currency_code": currency_code
+        }
+    
+        if currency_code != "THB":
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n💱 แปลงเป็นสกุล: {currency_code}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
         return
-
+        
     # =============================================================
-    # 6.1 รับจำนวนคนหลังจากจบทริป
+    # 6.1 รับจำนวนคนหลังจากจบทริป (รองรับ Currency)
+    # [อัปเดตล่าสุด 2026-05-22]: เพิ่มการแปลงสกุลเงินและแสดงยอดคู่ขนาน
     # =============================================================
     if user_id in user_state and user_state[user_id].get("action") == "end_trip":
         try:
             num_people = int(text)
             if num_people <= 0:
-                raise ValueError("Number of people must be positive")
-        except ValueError as e:
-            logger.warning(f"End trip invalid input: {text} - {e}")
+                raise ValueError
+        except ValueError:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
             return
-    
+        except Exception as e:
+            logger.error(f"End trip input error: {e}")
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
+            return
+        
         trip_id = user_state[user_id]["trip_id"]
         trip_title = user_state[user_id]["trip_title"]
+        currency_code = user_state[user_id].get("currency_code", "THB")
+        
         total, user_totals = get_total_expenses(trip_id)
-    
+        
         if total == 0:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
             del user_state[user_id]
             return
-    
+        
         avg = total / num_people
-        msg = f"🚀 ทริป: {trip_title}\n📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n👥 จำนวนคน: {num_people}\n\n💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
-    
-        # [อัปเดตล่าสุด 2026-05-21]: แก้ไข logic การแสดงผล end trip
-        # ถ้า diff > 0 แสดงว่าจ่ายเกิน → รับคืน, ถ้า diff < 0 จ่ายน้อย → จ่ายเพิ่ม
-        for uid, amt in user_totals.items():
-            name = get_display_name(uid, None)
-            diff = amt - avg
-            if diff > 0:
-                msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
-            elif diff < 0:
-                msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
+        
+        # ดึงอัตราแลกเปลี่ยนถ้าไม่ใช่ THB
+        exchange_rate = 1
+        if currency_code != "THB":
+            rate = get_exchange_rate("THB", currency_code)
+            if rate:
+                exchange_rate = rate
             else:
-                msg += f"• {name}: เรียบร้อยแล้ว\n"
-    
+                currency_code = "THB"  # Fallback ถ้า API ล่ม
+        
+        # สร้างข้อความสรุป
+        msg = f"🚀 ทริป: {trip_title}\n"
+        msg += f"👥 จำนวนคน: {num_people}\n\n"
+        
+        if currency_code != "THB" and exchange_rate != 1:
+            msg += f"💱 อัตราแลกเปลี่ยน: 1 THB = {exchange_rate:.4f} {currency_code}\n\n"
+            msg += f"📉 ยอดหารเฉลี่ย:\n"
+            msg += f"   • {avg:,.2f} บาท/คน\n"
+            msg += f"   • ≈ {avg * exchange_rate:,.2f} {currency_code}/คน\n\n"
+        else:
+            msg += f"📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n\n"
+        
+        msg += f"💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
+        
+        for uid, amt in user_totals.items():
+            name = get_display_name(uid, group_id)
+            diff = amt - avg
+            
+            if currency_code != "THB" and exchange_rate != 1:
+                if diff > 0:
+                    msg += f"• {name}: รับคืน {diff:,.2f} บาท (≈ {diff * exchange_rate:,.2f} {currency_code})\n"
+                elif diff < 0:
+                    msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท (≈ {abs(diff) * exchange_rate:,.2f} {currency_code})\n"
+                else:
+                    msg += f"• {name}: เรียบร้อยแล้ว\n"
+            else:
+                if diff > 0:
+                    msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
+                elif diff < 0:
+                    msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
+                else:
+                    msg += f"• {name}: เรียบร้อยแล้ว\n"
+        
+        # ปิดทริปและบันทึกสกุลเงินที่ใช้
         try:
-            supabase.table("trips").update({"status": "closed"}).eq("id", trip_id).execute()
+            supabase.table("trips").update({"status": "closed", "currency_code": currency_code}).eq("id", trip_id).execute()
         except Exception as e:
             logger.error(f"Close trip error: {e}")
-    
+            
         del user_state[user_id]
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+    # =================================================================
+    # [เพิ่มใหม่ 2026-05-22]: Command Excel และ ประวัติ
+    # =================================================================
+
+    # =============================================================
+    # Export Excel ทริปปัจจุบัน
+    # =============================================================
+    if text_lower == "excel":
+        trip = get_active_trip(user_id, group_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+    
+        excel_buffer, error = export_trip_to_excel(trip['id'], trip['title'])
+        if error:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
+            return
+    
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{trip['title']}_{timestamp}.xlsx"
+        public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
+    
+        if upload_error:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
+            return
+    
+        msg = f"✅ สร้างไฟล์ Excel สำเร็จ!\n\n"
+        msg += f"📊 ทริป: {trip['title']}\n"
+        msg += f"🔗 ลิงก์ดาวน์โหลด:\n{public_url}"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
+    # =============================================================
+    # ดูประวัติทริปทั้งหมด (Active + Closed)
+    # =============================================================
+    if text == "ประวัติ" or text_lower == "history":
+        try:
+            res = supabase.table("trips").select("*").order("created_at", desc=True).limit(10).execute()
+            all_trips = res.data if res.data else []
+        
+            if not all_trips:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ยังไม่มีประวัติทริป"))
+                return
+        
+            msg = "📜 **ประวัติทริป (10 ทริปล่าสุด):**\n\n"
+            for i, trip in enumerate(all_trips, 1):
+                status_icon = "🟢" if trip['status'] == 'active' else "🔴"
+                start_date = trip.get('created_at', '')[:10]
+                end_date = trip.get('updated_at', '')[:10] if trip['status'] == 'closed' else "ยังไม่จบ"
+            
+                msg += f"{i}. {status_icon} {trip['title']}\n"
+                msg += f"   📅 {start_date} → {end_date}\n"
+                msg += f"   👉 พิมพ์: excel {i}\n\n"
+        
+            user_state[user_id] = {"action": "export_history", "trips": all_trips}
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        except Exception as e:
+            logger.error(f"History error: {e}")
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถดึงข้อมูลได้"))
+        return
+
+    # =============================================================
+    # รับเลขเลือกทริปจากประวัติเพื่อ export
+    # =============================================================
+    if user_id in user_state and user_state[user_id].get("action") == "export_history":
+        try:
+            choice = int(text_lower) - 1
+            trips = user_state[user_id]["trips"]
+            if 0 <= choice < len(trips):
+                selected_trip = trips[choice]
+            
+                excel_buffer, error = export_trip_to_excel(selected_trip['id'], selected_trip['title'])
+                if error:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
+                    del user_state[user_id]
+                    return
+            
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{selected_trip['title']}_{timestamp}.xlsx"
+                public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
+            
+                if upload_error:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
+                    del user_state[user_id]
+                    return
+            
+                msg = f"✅ สร้างไฟล์ Excel สำเร็จ!\n\n"
+                msg += f"📊 ทริป: {selected_trip['title']}\n"
+                msg += f"🔗 ลิงก์ดาวน์โหลด:\n{public_url}"
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+            else:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง"))
+        except ValueError:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ตัวเลขเท่านั้น"))
+        del user_state[user_id]
         return
 
     # =============================================================
