@@ -206,7 +206,7 @@ def config_status():
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-22]: API จัดการ schedules (GET, POST, DELETE)
 # =================================================================
-@@app.route("/api/schedules", methods=["GET", "POST"])
+@app.route("/api/schedules", methods=["GET", "POST"])
 def handle_schedules():
     if request.method == "GET":
         schedules = load_schedules()
