@@ -460,6 +460,17 @@ def update_expense_amount(expense_id, new_amount):
         logger.error(f"Update expense error: {e}")
         return False
 
+def delete_expense(expense_id):
+    """ลบรายการค่าใช้จ่าย
+    [เพิ่มใหม่ 2026-05-23]: รองรับคำสั่ง ลบ [ID]
+    """
+    try:
+        supabase.table("expenses").delete().eq("id", expense_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Delete expense error: {e}")
+        return False
+
 def send_menu(reply_token):
     """ส่งเมนูคำสั่งทั้งหมดแบบ Quick Reply"""
     quick_reply = QuickReply(items=[
@@ -481,6 +492,7 @@ def send_menu(reply_token):
     msg += "🏁 **จบทริป** - ปิดทริปและคำนวณหาร\n"
     msg += "✏️ **edit** - แก้ไขยอดเงิน (แสดงรายการเรียงตามยอดน้อยไปมาก พร้อม ID 4 หลัก)\n"
     msg += "✏️ **edit [ID] [จำนวน]** - แก้ไขทันที เช่น edit 0042 500\n"
+    msg += "🗑️ **ลบ [ID]** - ลบรายการ เช่น ลบ 42 หรือ del 42\n"
     msg += "📅 **event** - แสดง Event ที่ตั้งค่าไว้\n"
     msg += "🛑 **stop event** - หยุดการแจ้งเตือน Event\n"
     msg += "📸 **ส่งรูปสลิป/บิล** - OCR อ่านยอดอัตโนมัติ\n"
@@ -619,14 +631,21 @@ def extract_amount(text):
     return None
 
 def parse_expense_text(text):
-    """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'"""
+    """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'
+    [แก้ไข 2026-05-23]:
+    - ต้องมีข้อความที่ไม่ใช่ตัวเลขอย่างน้อย 1 คำ (ป้องกัน '555' ถูกนับ)
+    - ดึงตัวเลขสุดท้าย (ป้องกัน '2 ขวด เหล้า 500' ดึงได้ 2 แทน 500)
+    """
     parts = text.split()
-    if len(parts) >= 3:
-        amount_match = re.search(r'(\d+(?:\.\d{2})?)', text)
-        if amount_match:
-            amount = float(amount_match.group(1))
+    # ต้องมีอย่างน้อย 2 part และมี part ที่ไม่ใช่ตัวเลขอย่างน้อย 1 ตัว
+    has_text = any(not re.match(r'^[\d,\.]+$', p) for p in parts)
+    if len(parts) >= 2 and has_text:
+        # ดึงตัวเลขสุดท้ายในข้อความ (ไม่ใช่ตัวแรก)
+        all_amounts = re.findall(r'(\d+(?:\.\d{1,2})?)', text)
+        if all_amounts:
+            amount = float(all_amounts[-1])  # ใช้ตัวสุดท้าย
             name = parts[0]
-            item = ' '.join(parts[1:-1]) if len(parts) > 2 else "ค่าใช้จ่าย"
+            item = ' '.join(p for p in parts[1:] if not re.match(r'^[\d,\.]+บาท?$', p)) or "ค่าใช้จ่าย"
             return name, item, amount
     return None, None, None
 
@@ -971,6 +990,47 @@ def handle_text(event):
         return
 
     # =============================================================
+    # 2.5 ลบรายการค่าใช้จ่าย: พิมพ์ "ลบ [ID]" หรือ "del [ID]"
+    # [เพิ่มใหม่ 2026-05-23]: ลบยอดที่บันทึกผิด
+    # =============================================================
+    if text.startswith("ลบ ") or text_lower.startswith("del "):
+        trip = get_active_trip(user_id, group_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+        
+        parts = text.split()
+        if len(parts) == 2:
+            try:
+                del_id = int(parts[1])
+                expenses = get_all_expenses(trip['id'])
+                selected = next((e for e in expenses if e['id'] == del_id), None)
+                
+                if selected:
+                    if delete_expense(del_id):
+                        id_display = f"{del_id:04d}"
+                        line_bot_api.reply_message(reply_token, TextSendMessage(
+                            text=f"🗑️ ลบรายการ ID {id_display} เรียบร้อย\n"
+                                 f"📝 {selected['item_name'][:40]}\n"
+                                 f"💰 {selected['amount']:,.2f} บาท"
+                        ))
+                    else:
+                        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ลบไม่สำเร็จ"))
+                else:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(
+                        text=f"⚠️ ไม่พบรายการ ID {del_id:04d}\nพิมพ์ 'edit' เพื่อดูรายการทั้งหมด"
+                    ))
+            except ValueError:
+                line_bot_api.reply_message(reply_token, TextSendMessage(
+                    text="⚠️ รูปแบบไม่ถูกต้อง\n👉 ตัวอย่าง: ลบ 42 หรือ del 42"
+                ))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(
+                text="👉 ตัวอย่าง: ลบ 42 หรือ del 42\nพิมพ์ 'edit' เพื่อดู ID ของแต่ละรายการ"
+            ))
+        return
+
+    # =============================================================
     # 3. พิมพ์ id - แสดง User ID ของคนพิมพ์ + Group ID
     #    [Bug 1 fix]: แสดง Group ID เพื่อให้ทุกคนในกลุ่มใช้ฟีเจอร์ทริปได้
     #    Group ID ใช้ร่วมกันได้ทั้งกลุ่ม ไม่ต้อง loop สมาชิกทีละคน
@@ -1270,8 +1330,8 @@ def handle_text(event):
         # อยู่ในโหมด showtime → ไม่บันทึกยอด
         return
 
-    if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel")) and \
-       not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel")):
+    if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel", "ลบ")) and \
+       not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel", "del")):
         trip = get_active_trip(user_id, group_id)
         if trip:
             name, item, amount = parse_expense_text(event.message.text.strip())
