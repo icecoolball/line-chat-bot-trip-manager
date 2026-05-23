@@ -496,7 +496,7 @@ def send_menu(reply_token):
     msg += "📅 **event** - แสดง Event ที่ตั้งค่าไว้\n"
     msg += "🛑 **stop event** - หยุดการแจ้งเตือน Event\n"
     msg += "📸 **ส่งรูปสลิป/บิล** - OCR อ่านยอดอัตโนมัติ\n"
-    msg += "✏️ **พิมพ์ข้อความ** เช่น 'บอล ค่าเบียร์ 2000' - บันทึกค่าใช้จ่าย\n"
+    msg += "✏️ **พิมพ์ข้อความ** เช่น 'บอล ค่าเบียร์ 2000 บาท' หรือ 'บอล 50 usd' - บันทึกค่าใช้จ่าย\n"
     msg += "❌ **ยกเลิก** - ออกจากโหมดแก้ไข\n\n"
     msg += "💡 **คำแนะนำ**: รายการจะเรียงตามยอดเงินจากน้อยไปมาก และแสดง ID 4 หลัก"
     
@@ -633,31 +633,40 @@ def extract_amount(text):
 def parse_expense_text(text):
     """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'
     [แก้ไข 2026-05-23]:
-    - ป้องกัน 555/5555/55555 (หัวเราะ) ถูกนับเป็นยอด
-    - ต้องมีข้อความที่ไม่ใช่ตัวเลขอย่างน้อย 1 คำ
-    - ดึงตัวเลขสุดท้าย (ป้องกัน '2 ขวด เหล้า 500' ดึงได้ 2 แทน 500)
+    - ต้องมีสกุลเงินต่อท้ายเสมอ เช่น บาท, ฿, THB, USD, JPY, ...
+    - กรอง 555/5555 (หัวเราะ)
+    - ดึงตัวเลขสุดท้ายก่อนสกุลเงิน
     """
-    # กรอง "หัวเราะ": ข้อความที่มีแต่เลข 5 ล้วนๆ หรือ 5 ต่อกัน ≥ 3 ตัว
     stripped = text.strip()
-    if re.match(r'^5+$', stripped):
-        return None, None, None
-    # กรองข้อความที่ token ทุกอันเป็น 5 ล้วน (เช่น "555 5555")
     tokens = stripped.split()
-    if tokens and all(re.match(r'^5+$', t) for t in tokens):
+    if not tokens:
         return None, None, None
 
-    parts = tokens
-    # ต้องมีอย่างน้อย 2 part และมี part ที่ไม่ใช่ตัวเลขอย่างน้อย 1 ตัว
-    has_text = any(not re.match(r'^[\d,\.]+$', p) for p in parts)
-    if len(parts) >= 2 and has_text:
-        # ดึงตัวเลขสุดท้ายในข้อความ (ไม่ใช่ตัวแรก)
-        all_amounts = re.findall(r'(\d+(?:\.\d{1,2})?)', text)
-        if all_amounts:
-            amount = float(all_amounts[-1])
-            name = parts[0]
-            item = ' '.join(p for p in parts[1:] if not re.match(r'^[\d,\.]+บาท?$', p)) or "ค่าใช้จ่าย"
-            return name, item, amount
-    return None, None, None
+    # กรองหัวเราะ: ทุก token เป็น 5 ล้วน
+    if all(re.match(r'^5+$', t) for t in tokens):
+        return None, None, None
+
+    # รายการสกุลเงินที่รองรับ
+    CURRENCIES = r'(บาท|฿|thb|usd|jpy|jyp|eur|gbp|sgd|hkd|cny|krw|aud|cad|myr)'
+
+    # ต้องมีสกุลเงินต่อท้าย (case-insensitive)
+    currency_match = re.search(CURRENCIES + r'\s*$', stripped, re.IGNORECASE)
+    if not currency_match:
+        return None, None, None
+
+    # ดึงตัวเลขที่อยู่ก่อนสกุลเงิน
+    before_currency = stripped[:currency_match.start()].strip()
+    amounts = re.findall(r'(\d+(?:\.\d{1,2})?)', before_currency)
+    if not amounts:
+        return None, None, None
+
+    amount = float(amounts[-1])
+    name = tokens[0] if tokens else "ไม่ระบุ"
+    # item คือส่วนกลาง ไม่รวมชื่อและตัวเลข+สกุลเงิน
+    item_parts = [t for t in tokens[1:] if not re.match(r'^[\d,\.]+$', t) and not re.match(CURRENCIES, t, re.IGNORECASE)]
+    item = ' '.join(item_parts) or "ค่าใช้จ่าย"
+
+    return name, item, amount
 
 def get_total_expenses(trip_id):
     """คำนวณยอดรวมและแยกตาม user"""
