@@ -249,36 +249,12 @@ def export_trip_to_excel(trip_id, trip_title):
         logger.error(f"Export Excel error: {e}")
         return None, str(e)
         
-def sanitize_filename(name):
-    """แปลงชื่อไฟล์ให้ Supabase Storage รองรับ
-    [แก้ไข 2026-05-24]: Supabase Storage ไม่รองรับภาษาไทยและอักขระพิเศษใน key
-    - แปลงภาษาไทย → transliterate หรือลบทิ้ง
-    - เหลือแค่ a-z, A-Z, 0-9, -, _
-    """
-    import unicodedata
-    # normalize unicode
-    name = unicodedata.normalize('NFKD', name)
-    # เก็บแค่ ASCII + แทนที่ space ด้วย _
-    ascii_name = name.encode('ascii', 'ignore').decode('ascii')
-    ascii_name = ascii_name.strip().replace(' ', '_')
-    # ลบอักขระที่ไม่ใช่ a-z A-Z 0-9 - _
-    ascii_name = re.sub(r'[^\w\-]', '', ascii_name)
-    # ถ้าว่างเปล่าหลัง sanitize ให้ใช้ trip แทน
-    return ascii_name if ascii_name else "trip"
-
 def upload_excel_to_supabase(file_buffer, filename):
-    """อัพโหลดไฟล์ Excel ขึ้น Supabase Storage
-    [แก้ไข 2026-05-24]: sanitize filename ก่อน upload ป้องกัน InvalidKey error
-    """
+    """อัพโหลดไฟล์ Excel ขึ้น Supabase Storage"""
     try:
-        # sanitize ชื่อไฟล์ก่อน upload
-        name_part, ext = filename.rsplit('.', 1)
-        safe_filename = f"{sanitize_filename(name_part)}.{ext}"
-        logger.info(f"Upload filename: {filename} → {safe_filename}")
-
         # อัพโหลดไฟล์ไปยัง bucket 'trip-exports'
         supabase.storage.from_("trip-exports").upload(
-            path=safe_filename,
+            path=filename,
             file=file_buffer.getvalue(),
             file_options={
                 "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -287,7 +263,7 @@ def upload_excel_to_supabase(file_buffer, filename):
         )
         
         # สร้าง public URL สำหรับดาวน์โหลด
-        public_url = supabase.storage.from_("trip-exports").get_public_url(safe_filename)
+        public_url = supabase.storage.from_("trip-exports").get_public_url(filename)
         return public_url, None
     except Exception as e:
         logger.error(f"Upload to Supabase Storage error: {e}")
@@ -718,6 +694,17 @@ def get_active_events():
 @app.route("/")
 def render_dashboard():
     return render_template("index.html")
+
+# =================================================================
+# [เพิ่ม 2026-05-24]: /health endpoint สำหรับ UptimeRobot ping
+# ให้ UptimeRobot (free) ping URL นี้ทุก 5 นาที → Render ไม่ sleep
+# วิธีตั้ง: https://uptimerobot.com → Add Monitor → HTTP(s)
+#           URL: https://your-app.onrender.com/health
+#           Interval: 5 minutes
+# =================================================================
+@app.route("/health")
+def health_check():
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}, 200
 
 @app.route("/static/<path:filename>")
 def serve_static(filename):
@@ -1271,7 +1258,7 @@ def handle_text(event):
             return
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"trip{trip['id']}_{trip['title']}_{timestamp}.xlsx"
+        filename = f"{trip['title']}_{timestamp}.xlsx"
         public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
         
         if upload_error:
@@ -1336,7 +1323,7 @@ def handle_text(event):
                     
                     # อัพโหลดขึ้น Supabase
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"trip{selected_trip['id']}_{selected_trip['title']}_{timestamp}.xlsx"
+                    filename = f"{selected_trip['title']}_{timestamp}.xlsx"
                     public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
                     
                     if upload_error:
@@ -1585,4 +1572,4 @@ def handle_image(event):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
