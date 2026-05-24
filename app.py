@@ -43,6 +43,32 @@ user_state = {}
 #SHOWTIME_FILE = "showtime.local.json"
 
 # =================================================================
+# [แก้ไข 2026-05-23]: State Management พร้อม timeout 10 นาที
+# สาเหตุ: Render free tier sleep/restart → state หาย → user ค้างโหมด
+# แก้: ทุก state มี timestamp, เกิน 10 นาทีถือว่าหมดอายุ auto-clear
+# =================================================================
+STATE_TIMEOUT_SECONDS = 600  # 10 นาที
+
+def set_state(user_id, data):
+    """บันทึก state พร้อม timestamp"""
+    data["_ts"] = datetime.now().timestamp()
+    user_state[user_id] = data
+
+def get_state(user_id):
+    """ดึง state — ถ้าหมดอายุหรือไม่มีให้ return None"""
+    s = user_state.get(user_id)
+    if not s:
+        return None
+    if datetime.now().timestamp() - s.get("_ts", 0) > STATE_TIMEOUT_SECONDS:
+        clear_state(user_id)
+        return None
+    return s
+
+def clear_state(user_id):
+    """ลบ state"""
+    user_state.pop(user_id, None)
+
+# =================================================================
 # [อัปเดตล่าสุด 2026-05-22]: ฟังก์ชัน Showtime Management
 # ประกาศ state สำหรับควบคุมการทำงาน: active (ปกติ) / showtime_mode (หยุดสลิป)
 # =================================================================
@@ -223,12 +249,36 @@ def export_trip_to_excel(trip_id, trip_title):
         logger.error(f"Export Excel error: {e}")
         return None, str(e)
         
+def sanitize_filename(name):
+    """แปลงชื่อไฟล์ให้ Supabase Storage รองรับ
+    [แก้ไข 2026-05-24]: Supabase Storage ไม่รองรับภาษาไทยและอักขระพิเศษใน key
+    - แปลงภาษาไทย → transliterate หรือลบทิ้ง
+    - เหลือแค่ a-z, A-Z, 0-9, -, _
+    """
+    import unicodedata
+    # normalize unicode
+    name = unicodedata.normalize('NFKD', name)
+    # เก็บแค่ ASCII + แทนที่ space ด้วย _
+    ascii_name = name.encode('ascii', 'ignore').decode('ascii')
+    ascii_name = ascii_name.strip().replace(' ', '_')
+    # ลบอักขระที่ไม่ใช่ a-z A-Z 0-9 - _
+    ascii_name = re.sub(r'[^\w\-]', '', ascii_name)
+    # ถ้าว่างเปล่าหลัง sanitize ให้ใช้ trip แทน
+    return ascii_name if ascii_name else "trip"
+
 def upload_excel_to_supabase(file_buffer, filename):
-    """อัพโหลดไฟล์ Excel ขึ้น Supabase Storage"""
+    """อัพโหลดไฟล์ Excel ขึ้น Supabase Storage
+    [แก้ไข 2026-05-24]: sanitize filename ก่อน upload ป้องกัน InvalidKey error
+    """
     try:
+        # sanitize ชื่อไฟล์ก่อน upload
+        name_part, ext = filename.rsplit('.', 1)
+        safe_filename = f"{sanitize_filename(name_part)}.{ext}"
+        logger.info(f"Upload filename: {filename} → {safe_filename}")
+
         # อัพโหลดไฟล์ไปยัง bucket 'trip-exports'
         supabase.storage.from_("trip-exports").upload(
-            path=filename,
+            path=safe_filename,
             file=file_buffer.getvalue(),
             file_options={
                 "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -237,7 +287,7 @@ def upload_excel_to_supabase(file_buffer, filename):
         )
         
         # สร้าง public URL สำหรับดาวน์โหลด
-        public_url = supabase.storage.from_("trip-exports").get_public_url(filename)
+        public_url = supabase.storage.from_("trip-exports").get_public_url(safe_filename)
         return public_url, None
     except Exception as e:
         logger.error(f"Upload to Supabase Storage error: {e}")
@@ -434,6 +484,17 @@ def update_expense_amount(expense_id, new_amount):
         logger.error(f"Update expense error: {e}")
         return False
 
+def delete_expense(expense_id):
+    """ลบรายการค่าใช้จ่าย
+    [เพิ่มใหม่ 2026-05-23]: รองรับคำสั่ง ลบ [ID]
+    """
+    try:
+        supabase.table("expenses").delete().eq("id", expense_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Delete expense error: {e}")
+        return False
+
 def send_menu(reply_token):
     """ส่งเมนูคำสั่งทั้งหมดแบบ Quick Reply"""
     quick_reply = QuickReply(items=[
@@ -455,10 +516,11 @@ def send_menu(reply_token):
     msg += "🏁 **จบทริป** - ปิดทริปและคำนวณหาร\n"
     msg += "✏️ **edit** - แก้ไขยอดเงิน (แสดงรายการเรียงตามยอดน้อยไปมาก พร้อม ID 4 หลัก)\n"
     msg += "✏️ **edit [ID] [จำนวน]** - แก้ไขทันที เช่น edit 0042 500\n"
+    msg += "🗑️ **ลบ [ID]** - ลบรายการ เช่น ลบ 42 หรือ del 42\n"
     msg += "📅 **event** - แสดง Event ที่ตั้งค่าไว้\n"
     msg += "🛑 **stop event** - หยุดการแจ้งเตือน Event\n"
     msg += "📸 **ส่งรูปสลิป/บิล** - OCR อ่านยอดอัตโนมัติ\n"
-    msg += "✏️ **พิมพ์ข้อความ** เช่น 'บอล ค่าเบียร์ 2000' - บันทึกค่าใช้จ่าย\n"
+    msg += "✏️ **พิมพ์ข้อความ** เช่น 'บอล ค่าเบียร์ 2000 บาท' หรือ 'บอล 50 usd' - บันทึกค่าใช้จ่าย\n"
     msg += "❌ **ยกเลิก** - ออกจากโหมดแก้ไข\n\n"
     msg += "💡 **คำแนะนำ**: รายการจะเรียงตามยอดเงินจากน้อยไปมาก และแสดง ID 4 หลัก"
     
@@ -593,16 +655,42 @@ def extract_amount(text):
     return None
 
 def parse_expense_text(text):
-    """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'"""
-    parts = text.split()
-    if len(parts) >= 3:
-        amount_match = re.search(r'(\d+(?:\.\d{2})?)', text)
-        if amount_match:
-            amount = float(amount_match.group(1))
-            name = parts[0]
-            item = ' '.join(parts[1:-1]) if len(parts) > 2 else "ค่าใช้จ่าย"
-            return name, item, amount
-    return None, None, None
+    """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'
+    [แก้ไข 2026-05-23]:
+    - ต้องมีสกุลเงินต่อท้ายเสมอ เช่น บาท, ฿, THB, USD, JPY, ...
+    - กรอง 555/5555 (หัวเราะ)
+    - ดึงตัวเลขสุดท้ายก่อนสกุลเงิน
+    """
+    stripped = text.strip()
+    tokens = stripped.split()
+    if not tokens:
+        return None, None, None
+
+    # กรองหัวเราะ: ทุก token เป็น 5 ล้วน
+    if all(re.match(r'^5+$', t) for t in tokens):
+        return None, None, None
+
+    # รายการสกุลเงินที่รองรับ
+    CURRENCIES = r'(บาท|฿|thb|usd|jpy|jyp|eur|gbp|sgd|hkd|cny|krw|aud|cad|myr)'
+
+    # ต้องมีสกุลเงินต่อท้าย (case-insensitive)
+    currency_match = re.search(CURRENCIES + r'\s*$', stripped, re.IGNORECASE)
+    if not currency_match:
+        return None, None, None
+
+    # ดึงตัวเลขที่อยู่ก่อนสกุลเงิน
+    before_currency = stripped[:currency_match.start()].strip()
+    amounts = re.findall(r'(\d+(?:\.\d{1,2})?)', before_currency)
+    if not amounts:
+        return None, None, None
+
+    amount = float(amounts[-1])
+    name = tokens[0] if tokens else "ไม่ระบุ"
+    # item คือส่วนกลาง ไม่รวมชื่อและตัวเลข+สกุลเงิน
+    item_parts = [t for t in tokens[1:] if not re.match(r'^[\d,\.]+$', t) and not re.match(CURRENCIES, t, re.IGNORECASE)]
+    item = ' '.join(item_parts) or "ค่าใช้จ่าย"
+
+    return name, item, amount
 
 def get_total_expenses(trip_id):
     """คำนวณยอดรวมและแยกตาม user"""
@@ -662,23 +750,23 @@ def handle_text(event):
         # แสดง showtime ล่าสุด และขอให้ส่งรูป
         msg = format_showtime_message()
         msg += "\n\n📸 ส่งรูป Showtime ใหม่เพื่ออัปเดต (bot จะหยุดรับสลิปชั่วคราว)"
-        user_state[user_id] = {"action": "showtime_mode"}
+        set_state(user_id, {"action": "showtime_mode"})
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
     # save: บันทึก showtime (ถ้ามี temp) แล้ว resume สลิป + ออกจาก function
     if text_lower == "save":
-        if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+        if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
             # ถ้ามี showtime_temp ให้บันทึก
-            if user_state[user_id].get("showtime_temp"):
+            if get_state(user_id).get("showtime_temp"):
                 existing = load_showtime()
-                sorted_schedule = sort_showtime_by_time(user_state[user_id]["showtime_temp"])
+                sorted_schedule = sort_showtime_by_time(get_state(user_id)["showtime_temp"])
                 existing["schedule"] = sorted_schedule
                 existing["last_updated"] = datetime.now().isoformat()
                 save_showtime(existing)
             
             # ออกจาก showtime_mode
-            del user_state[user_id]
+            clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(
                 text="✅ บันทึก Showtime เสร็จ!\n\n"
                      "📸 ตอนนี้สลิปทำงานปกติแล้ว สามารถส่งรูปบิลเพื่อบันทึกยอดเงินได้"
@@ -697,15 +785,15 @@ def handle_text(event):
         msg += format_showtime_message()
         msg += "\n\n📸 ส่งรูป Showtime ใหม่ หรือ 📝 พิมพ์เพื่อเพิ่ม/แก้เฉพาะศิลปิน (ทีละหลายบรรทัด)"
         msg += "\n👉 เช่น:\n13:00-13:50 ROMANCE\n14:00-14:50 SWEET MULLET"
-        user_state[user_id] = {"action": "showtime_mode", "edit_mode": True}
+        set_state(user_id, {"action": "showtime_mode", "edit_mode": True})
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
     # =============================================================
     # [Showtime fix]: รับข้อมูล showtime จากการพิมพ์ (รองรับหลายบรรทัด)
     # =============================================================
-    if user_id in user_state and user_state[user_id].get("action") == "showtime_mode" and \
-       user_state[user_id].get("edit_mode"):
+    if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode" and \
+       get_state(user_id).get("edit_mode"):
         lines = text.splitlines()
         updated = False
         existing = load_showtime()
@@ -752,12 +840,12 @@ def handle_text(event):
     # =============================================================
     if text == "เมนู" or text_lower == "menu":
         # ถ้าอยู่ใน showtime_mode ให้แสดง help เฉพาะ showtime commands
-        if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+        if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
             msg = "📋 **Showtime Commands:**\n\n"
             msg += "📺 **showtime** - แสดง Showtime ล่าสุด\n"
             msg += "✏️ **update showtime** - แก้ไข Showtime (พิมพ์หรือส่งรูป)\n"
             msg += "✏️ **editshowtime** - แก้ไข Showtime\n"
-            if user_state[user_id].get("edit_mode"):
+            if get_state(user_id).get("edit_mode"):
                 msg += "📝 **HH:MM-HH:MM ศิลปิน** - เพิ่ม/แก้ไข Showtime (หลายบรรทัดได้)\n"
             msg += "💾 **save** - บันทึก Showtime และออกจาก Function\n"
             msg += "❌ **ยกเลิก** - ออกจากโหมด Showtime\n"
@@ -770,9 +858,9 @@ def handle_text(event):
     # =============================================================
     # 0.5 Showtime Mode Guard: ถ้าอยู่ใน showtime_mode → บล็อก command อื่น
     # =============================================================
-    if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+    if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         # ถ้า edit_mode=True ให้ตรวจว่าทุกบรรทัดที่ไม่ว่างตรง pattern หรือไม่
-        if user_state[user_id].get("edit_mode"):
+        if get_state(user_id).get("edit_mode"):
             lines = text.splitlines()
             all_valid = True
             time_pattern_input = r'^(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+)$'
@@ -803,12 +891,12 @@ def handle_text(event):
                 return
 
     if text == "ยกเลิก" or text_lower == "cancel":
-        if user_id in user_state:
-            if user_state[user_id].get("action") == "showtime_mode":
-                del user_state[user_id]
+        if get_state(user_id):
+            if get_state(user_id).get("action") == "showtime_mode":
+                clear_state(user_id)
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมด Showtime เรียบร้อย"))
             else:
-                del user_state[user_id]
+                clear_state(user_id)
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมดแก้ไขเรียบร้อย"))
         else:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีโหมดแก้ไขที่กำลังทำงานอยู่"))
@@ -852,8 +940,8 @@ def handle_text(event):
             return
         
         # ล้าง state เดิมก่อน
-        if user_id in user_state:
-            del user_state[user_id]
+        if get_state(user_id):
+            clear_state(user_id)
         
         # สร้างข้อความแสดงรายการทั้งหมด (เรียงตามยอดจากน้อยไปมาก) - แสดง ID 4 หลัก
         msg = "✏️ เลือกรายการที่ต้องการแก้ไขยอดเงิน (พิมพ์ ID 4 หลัก):\n"
@@ -870,13 +958,13 @@ def handle_text(event):
         msg += "👉 พิมพ์ 'edit 0042 500' เพื่อเปลี่ยน ID 42 เป็น 500 บาท\n"
         msg += "👉 พิมพ์ 'ยกเลิก' หรือ 'cancel' เพื่อออกจากโหมดแก้ไข"
         
-        user_state[user_id] = {"action": "edit_selection", "expenses": expenses}
+        set_state(user_id, {"action": "edit_selection", "expenses": expenses})
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
     # รับการเลือกแก้ไข (ใช้ ID จริง - รองรับทั้งแบบมีและไม่มี 0 ข้างหน้า)
-    if user_id in user_state and user_state[user_id].get("action") == "edit_selection":
-        expenses = user_state[user_id]["expenses"]
+    if get_state(user_id) and get_state(user_id).get("action") == "edit_selection":
+        expenses = get_state(user_id)["expenses"]
         parts = text_lower.split()
         
         try:
@@ -886,19 +974,19 @@ def handle_text(event):
                 selected = next((e for e in expenses if e['id'] == expense_id), None)
                 
                 if selected:
-                    user_state[user_id] = {
+                    set_state(user_id, {
                         "action": "edit_amount",
                         "expense_id": selected['id'],
                         "expense_item": selected['item_name'],
                         "old_amount": selected['amount']
-                    }
+                    })
                     id_display = f"{selected['id']:04d}"
                     line_bot_api.reply_message(reply_token, TextSendMessage(
                         text=f"✏️ แก้ไขรายการ ID {id_display}: {selected['item_name'][:50]}\n💰 ยอดเดิม: {selected['amount']:,.2f} บาท\n\n👉 พิมพ์จำนวนเงินใหม่ (เช่น 500)\n👉 พิมพ์ 'ยกเลิก' หรือ 'cancel' เพื่อออก"
                     ))
                 else:
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ ไม่พบรายการ ID {expense_id}"))
-                    del user_state[user_id]
+                    clear_state(user_id)
             
             elif len(parts) >= 2:
                 expense_id = int(parts[0])
@@ -913,24 +1001,24 @@ def handle_text(event):
                         ))
                     else:
                         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ แก้ไขไม่สำเร็จ"))
-                    del user_state[user_id]
+                    clear_state(user_id)
                 else:
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ ไม่พบ ID {expense_id} หรือจำนวนเงินไม่ถูกต้อง"))
-                    del user_state[user_id]
+                    clear_state(user_id)
         except (ValueError, IndexError):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุ ID และจำนวนเงินให้ถูกต้อง (เช่น edit 0042 500)"))
-            del user_state[user_id]
+            clear_state(user_id)
         return
     
     # รับจำนวนเงินใหม่หลังเลือก edit
-    if user_id in user_state and user_state[user_id].get("action") == "edit_amount":
+    if get_state(user_id) and get_state(user_id).get("action") == "edit_amount":
         try:
             new_amount = float(text_lower.replace(',', ''))
             if new_amount <= 0:
                 raise ValueError
-            expense_id = user_state[user_id]["expense_id"]
-            expense_item = user_state[user_id]["expense_item"]
-            old_amount = user_state[user_id]["old_amount"]
+            expense_id = get_state(user_id)["expense_id"]
+            expense_item = get_state(user_id)["expense_item"]
+            old_amount = get_state(user_id)["old_amount"]
             
             if update_expense_amount(expense_id, new_amount):
                 id_display = f"{expense_id:04d}"
@@ -941,7 +1029,48 @@ def handle_text(event):
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ แก้ไขไม่สำเร็จ"))
         except:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์จำนวนเงินเป็นตัวเลข (เช่น 500)"))
-        del user_state[user_id]
+        clear_state(user_id)
+        return
+
+    # =============================================================
+    # 2.5 ลบรายการค่าใช้จ่าย: พิมพ์ "ลบ [ID]" หรือ "del [ID]"
+    # [เพิ่มใหม่ 2026-05-23]: ลบยอดที่บันทึกผิด
+    # =============================================================
+    if text.startswith("ลบ ") or text_lower.startswith("del "):
+        trip = get_active_trip(user_id, group_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+        
+        parts = text.split()
+        if len(parts) == 2:
+            try:
+                del_id = int(parts[1])
+                expenses = get_all_expenses(trip['id'])
+                selected = next((e for e in expenses if e['id'] == del_id), None)
+                
+                if selected:
+                    if delete_expense(del_id):
+                        id_display = f"{del_id:04d}"
+                        line_bot_api.reply_message(reply_token, TextSendMessage(
+                            text=f"🗑️ ลบรายการ ID {id_display} เรียบร้อย\n"
+                                 f"📝 {selected['item_name'][:40]}\n"
+                                 f"💰 {selected['amount']:,.2f} บาท"
+                        ))
+                    else:
+                        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ลบไม่สำเร็จ"))
+                else:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(
+                        text=f"⚠️ ไม่พบรายการ ID {del_id:04d}\nพิมพ์ 'edit' เพื่อดูรายการทั้งหมด"
+                    ))
+            except ValueError:
+                line_bot_api.reply_message(reply_token, TextSendMessage(
+                    text="⚠️ รูปแบบไม่ถูกต้อง\n👉 ตัวอย่าง: ลบ 42 หรือ del 42"
+                ))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(
+                text="👉 ตัวอย่าง: ลบ 42 หรือ del 42\nพิมพ์ 'edit' เพื่อดู ID ของแต่ละรายการ"
+            ))
         return
 
     # =============================================================
@@ -1029,12 +1158,12 @@ def handle_text(event):
                 currency_code = parts[2].upper()
     
         # เก็บ state ไว้รอจำนวนคน
-        user_state[user_id] = {
+        set_state(user_id, {
             "action": "end_trip",
             "trip_id": trip['id'],
             "trip_title": trip['title'],
             "currency_code": currency_code
-        }
+        })
     
         if currency_code != "THB":
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n💱 แปลงเป็นสกุล: {currency_code}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
@@ -1046,7 +1175,7 @@ def handle_text(event):
     # 6.1 รับจำนวนคนหลังจากจบทริป (รองรับ Currency)
     # [อัปเดตล่าสุด 2026-05-22]: เพิ่มการแปลงสกุลเงินและแสดงยอดคู่ขนาน
     # =============================================================
-    if user_id in user_state and user_state[user_id].get("action") == "end_trip":
+    if get_state(user_id) and get_state(user_id).get("action") == "end_trip":
         try:
             num_people = int(text)
             if num_people <= 0:
@@ -1059,15 +1188,15 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
             return
         
-        trip_id = user_state[user_id]["trip_id"]
-        trip_title = user_state[user_id]["trip_title"]
-        currency_code = user_state[user_id].get("currency_code", "THB")
+        trip_id = get_state(user_id)["trip_id"]
+        trip_title = get_state(user_id)["trip_title"]
+        currency_code = get_state(user_id).get("currency_code", "THB")
         
         total, user_totals = get_total_expenses(trip_id)
         
         if total == 0:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
-            del user_state[user_id]
+            clear_state(user_id)
             return
         
         avg = total / num_people
@@ -1120,7 +1249,7 @@ def handle_text(event):
         except Exception as e:
             logger.error(f"Close trip error: {e}")
             
-        del user_state[user_id]
+        clear_state(user_id)
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     # =================================================================
@@ -1142,7 +1271,7 @@ def handle_text(event):
             return
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{trip['title']}_{timestamp}.xlsx"
+        filename = f"trip{trip['id']}_{trip['title']}_{timestamp}.xlsx"
         public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
         
         if upload_error:
@@ -1177,7 +1306,7 @@ def handle_text(event):
                 msg += f"   📅 {start_date} → {end_date}\n"
                 msg += f"   👉 พิมพ์: excel {i}\n\n"
             
-            user_state[user_id] = {"action": "export_history", "trips": all_trips}
+            set_state(user_id, {"action": "export_history", "trips": all_trips})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         except Exception as e:
             logger.error(f"History error: {e}")
@@ -1188,12 +1317,12 @@ def handle_text(event):
     # [แก้ไข 2026-05-22]: รับเลขเลือกทริปจากประวัติเพื่อ export
     # ปรับปรุง error handling และใช้ reply_message แทน push_message
     # =============================================================
-    if user_id in user_state and user_state[user_id].get("action") == "export_history":
+    if get_state(user_id) and get_state(user_id).get("action") == "export_history":
         parts = text_lower.split()
         if len(parts) == 2 and parts[0] == "excel":
             try:
                 choice = int(parts[1]) - 1
-                trips = user_state[user_id]["trips"]
+                trips = get_state(user_id)["trips"]
                 
                 if 0 <= choice < len(trips):
                     selected_trip = trips[choice]
@@ -1202,17 +1331,17 @@ def handle_text(event):
                     excel_buffer, error = export_trip_to_excel(selected_trip['id'], selected_trip['title'])
                     if error:
                         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
-                        del user_state[user_id]
+                        clear_state(user_id)
                         return
                     
                     # อัพโหลดขึ้น Supabase
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"{selected_trip['title']}_{timestamp}.xlsx"
+                    filename = f"trip{selected_trip['id']}_{selected_trip['title']}_{timestamp}.xlsx"
                     public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
                     
                     if upload_error:
                         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
-                        del user_state[user_id]
+                        clear_state(user_id)
                         return
                     
                     msg = f"✅ สร้างไฟล์ Excel สำเร็จ!\n\n"
@@ -1220,7 +1349,7 @@ def handle_text(event):
                     msg += f"🔗 ลิงก์ดาวน์โหลด:\n{public_url}"
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
                 else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ หมายเลขไม่ถูกต้อง (มี 1-{len(user_state[user_id]['trips'])})"))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ หมายเลขไม่ถูกต้อง (มี 1-{len(get_state(user_id)['trips'])})"))
                     return  # ไม่ลบ state ให้ user พิมพ์ใหม่ได้
             except ValueError:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ตัวเลขเท่านั้น เช่น excel 1"))
@@ -1229,23 +1358,23 @@ def handle_text(event):
                 logger.error(f"Export history error: {e}")
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ เกิดข้อผิดพลาด: {str(e)}"))
             
-            del user_state[user_id]
+            clear_state(user_id)
             return
         else:
             # ถ้าพิมพ์อย่างอื่นที่ไม่ใช่ "excel [เลข]" ให้ยกเลิก state
-            del user_state[user_id] 
+            clear_state(user_id) 
             
     # =============================================================
     # 7. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
     # [แก้ไข 2026-05-22]: เพิ่ม "ประวัติ" และ "excel" ใน skip list
     # [Showtime fix]: ถ้าอยู่ใน showtime_mode ให้บล็อกการบันทึกยอด
     # =============================================================
-    if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+    if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         # อยู่ในโหมด showtime → ไม่บันทึกยอด
         return
 
-    if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel")) and \
-       not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel")):
+    if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel", "ลบ")) and \
+       not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel", "del")):
         trip = get_active_trip(user_id, group_id)
         if trip:
             name, item, amount = parse_expense_text(event.message.text.strip())
@@ -1291,7 +1420,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี Event ที่กำลังทำงานอยู่"))
             return
         
-        user_state[user_id] = {"action": "stop_event", "events": events}
+        set_state(user_id, {"action": "stop_event", "events": events})
         msg = "🚫 เลือกหมายเลข Event ที่คุณต้องการสั่งหยุดทำงาน (Stop):\n=======================\n"
         for i, e in enumerate(events, 1):
             msg += f"{i}. งาน: {e.get('name', '-')}\n🛑 (ID ย่อ: {e.get('id', '-')})\n-----------------------\n"
@@ -1303,10 +1432,10 @@ def handle_text(event):
     # =============================================================
     # 9.1 รับเลข event ที่เลือกหยุด
     # =============================================================
-    if user_id in user_state and user_state[user_id].get("action") == "stop_event":
+    if get_state(user_id) and get_state(user_id).get("action") == "stop_event":
         try:
             choice = int(text_lower) - 1
-            events = user_state[user_id]["events"]
+            events = get_state(user_id)["events"]
             if 0 <= choice < len(events):
                 selected = events[choice]
                 schedules = load_schedules()
@@ -1324,7 +1453,7 @@ def handle_text(event):
         except Exception as e:
             logger.error(f"Stop event error: {e}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาด กรุณาลองใหม่"))
-        del user_state[user_id]
+        clear_state(user_id)
         return
 
 # =============================================================
@@ -1332,7 +1461,7 @@ def handle_text(event):
 # =============================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token):
     # [Showtime fix]: ตรวจ state showtime_mode → ถ้า active ให้ pause การประมวลสลิป
-    if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+    if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         line_bot_api.reply_message(reply_token, TextSendMessage(
             text="⏸️ กำลังอยู่ในโหมด Showtime\n\n"
                  "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
@@ -1392,7 +1521,7 @@ def handle_image(event):
     reply_token = event.reply_token
     
     # [Showtime fix]: ตรวจสอบ showtime_mode ก่อน
-    if user_id in user_state and user_state[user_id].get("action") == "showtime_mode":
+    if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         try:
             message_content = line_bot_api.get_message_content(event.message.id)
             image_bytes = b''.join(message_content.iter_content())
@@ -1403,7 +1532,7 @@ def handle_image(event):
             showtime_list = extract_showtime(text_detected)
             
             if showtime_list:
-                if user_state[user_id].get("edit_mode"):
+                if get_state(user_id).get("edit_mode"):
                     # [Showtime fix]: edit_mode → merge กับ existing schedule
                     existing = load_showtime()
                     schedule = existing.get("schedule", [])
@@ -1430,7 +1559,7 @@ def handle_image(event):
                     msg += "\n\n📝 พิมพ์เพิ่มเติม หรือ 'save' เพื่อสิ้นสุดการแก้ไข"
                 else:
                     # [Showtime fix]: normal mode → เก็บไว้ใน state ชั่วคราว รอ user พิมพ์ save
-                    user_state[user_id]["showtime_temp"] = showtime_list
+                    get_state(user_id)["showtime_temp"] = showtime_list
                     msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 **ตารางการแสดง:**\n\n"
                     for item in showtime_list:
                         msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
