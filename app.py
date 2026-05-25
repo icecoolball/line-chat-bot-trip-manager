@@ -1385,10 +1385,11 @@ def handle_text(event):
                 
     # =============================================================
     # 8. พิมพ์ event - แสดง event ปัจจุบัน
+    # [แก้ไข 2026-05-25]: เปลี่ยน URL จาก Render เป็น Railway
     # =============================================================
     if text_lower == "event":
         events = get_active_events()
-        base_url = "https://web-production-3120c7.up.railway.app"
+        base_url = "https://web-production-3120c7.up.railway.app"  # แก้ตรงนี้
         
         if not events:
             msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่ (หรือทุกงานหมดอายุ/ถูกปิดแล้ว)\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n" + base_url
@@ -1400,7 +1401,7 @@ def handle_text(event):
         
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
-
+        
     # =============================================================
     # 9. พิมพ์ stop event - แสดงรายการให้เลือกหยุด
     # =============================================================
@@ -1597,6 +1598,7 @@ def handle_image(event):
     
 # =================================================================
 # [แก้ไข 2026-05-25]: แก้ syntax error
+# เปลี่ยนจาก if name == "main": เป็น if __name__ == "__main__":
 # =================================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
