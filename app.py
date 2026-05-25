@@ -1456,13 +1456,14 @@ def handle_text(event):
 # เหตุผล: reply_token หมดอายุหลัง 30 วินาที OCR อาจใช้เวลานานกว่า
 # =================================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
-    # [Showtime fix]: ตรวจ state showtime_mode → ถ้า active ให้ pause การประมวลสลิป
+    # [Showtime fix]: ตรวจ state showtime_mode
     if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         line_bot_api.push_message(user_id, TextSendMessage(
             text="⏸️ กำลังอยู่ในโหมด Showtime\n\n"
                  "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
         ))
         return
+    
     try:
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
@@ -1486,7 +1487,6 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
                 "item_name": item_name
             }).execute()
             
-            # ดึง ID ของรายการที่เพิ่งเพิ่ม
             new_id = result.data[0]['id'] if result.data else None
             
             success_msg = f"✅ บันทึกจำนวนเงิน {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"
@@ -1498,7 +1498,6 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
                 success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit แล้วเลือก ID ที่ต้องการ"
             
             # [แก้ไข]: ใช้ push_message แทน reply_message
-            # เพราะ reply_token อาจหมดอายุแล้ว
             line_bot_api.push_message(user_id, TextSendMessage(text=success_msg))
         else:
             # [แก้ไข]: ใช้ push_message แทน reply_message
@@ -1594,6 +1593,8 @@ def handle_image(event):
 # =================================================================
 # [แก้ไข 2026-05-25]: แก้ syntax error
 # =================================================================
+# แก้จาก: if name == "main":
+# เป็น:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
     app.run(host="0.0.0.0", port=port, debug=False)
