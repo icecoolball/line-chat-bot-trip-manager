@@ -338,6 +338,9 @@ def config_status():
 def handle_schedules():
     if request.method == "GET":
         schedules = load_schedules()
+        # [แก้ไข 2026-05-25]: Filter เฉพาะ active = true
+        schedules = [s for s in schedules if s.get('active', True)]
+        
         # แปลง field names ให้ตรงกับ frontend
         formatted = []
         for s in schedules:
@@ -1021,7 +1024,7 @@ def handle_text(event):
 
     # =============================================================
     # 2.5 ลบรายการค่าใช้จ่าย: พิมพ์ "ลบ [ID]" หรือ "del [ID]"
-    # [เพิ่มใหม่ 2026-05-23]: ลบยอดที่บันทึกผิด
+    # [แก้ไข 2026-05-25]: แก้ไข condition ให้รองรับช่องว่าง 1 ตัว
     # =============================================================
     if text.startswith("ลบ ") or text_lower.startswith("del "):
         trip = get_active_trip(user_id, group_id)
@@ -1041,8 +1044,8 @@ def handle_text(event):
                         id_display = f"{del_id:04d}"
                         line_bot_api.reply_message(reply_token, TextSendMessage(
                             text=f"🗑️ ลบรายการ ID {id_display} เรียบร้อย\n"
-                                 f"📝 {selected['item_name'][:40]}\n"
-                                 f"💰 {selected['amount']:,.2f} บาท"
+                                f"📝 {selected['item_name'][:40]}\n"
+                                f"💰 {selected['amount']:,.2f} บาท"
                         ))
                     else:
                         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ลบไม่สำเร็จ"))
@@ -1059,7 +1062,7 @@ def handle_text(event):
                 text="👉 ตัวอย่าง: ลบ 42 หรือ del 42\nพิมพ์ 'edit' เพื่อดู ID ของแต่ละรายการ"
             ))
         return
-
+        
     # =============================================================
     # 3. พิมพ์ id - แสดง User ID ของคนพิมพ์ + Group ID
     #    [Bug 1 fix]: แสดง Group ID เพื่อให้ทุกคนในกลุ่มใช้ฟีเจอร์ทริปได้
@@ -1385,7 +1388,7 @@ def handle_text(event):
     # =============================================================
     if text_lower == "event":
         events = get_active_events()
-        base_url = "https://line-chat-bot-trip-manager.onrender.com"
+        base_url = "https://web-production-3120c7.up.railway.app"
         
         if not events:
             msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่ (หรือทุกงานหมดอายุ/ถูกปิดแล้ว)\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n" + base_url
@@ -1455,15 +1458,11 @@ def handle_text(event):
 def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
     # [Showtime fix]: ตรวจ state showtime_mode → ถ้า active ให้ pause การประมวลสลิป
     if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
-        try:
-            line_bot_api.push_message(user_id, TextSendMessage(
-                text="⏸️ กำลังอยู่ในโหมด Showtime\n\n"
-                     "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
-            ))
-        except Exception as e:
-            logger.error(f"Push message error (showtime pause): {e}")
+        line_bot_api.push_message(user_id, TextSendMessage(
+            text="⏸️ กำลังอยู่ในโหมด Showtime\n\n"
+                 "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
+        ))
         return
-    
     try:
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
@@ -1498,10 +1497,11 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
             else:
                 success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit แล้วเลือก ID ที่ต้องการ"
             
-            # [แก้ไข]: ใช้ push_message แทน reply_message
+            # [แก้ไข 2026-05-25]: ใช้ push_message แทน reply_message
+            # เพราะ reply_token หมดอายุแล้ว (OCR ใช้เวลา)
             line_bot_api.push_message(user_id, TextSendMessage(text=success_msg))
         else:
-            # [แก้ไข]: ใช้ push_message แทน reply_message
+            # [แก้ไข 2026-05-25]: ใช้ push_message แทน reply_message
             line_bot_api.push_message(user_id, TextSendMessage(
                 text="⚠️ ไม่พบจำนวนเงินในรูป หรือไม่ใช่สลิปการเงิน\n\n"
                      "📌 ลองบันทึกด้วยข้อความ เช่น 'บอล ค่าเหล้า 500'\n"
