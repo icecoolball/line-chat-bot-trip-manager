@@ -1450,11 +1450,11 @@ def handle_text(event):
         clear_state(user_id)
         return
     
-# =============================================================
+# =================================================================
 # 10. รองรับรูปภาพสลิป/บิล
-# [แก้ไข 2026-05-25]: เปลี่ยน reply_message → push_message ทั้งหมด
-# เหตุผล: OCR อาจใช้เวลานาน reply_token หมดอายุก่อนส่งข้อความกลับ
-# =============================================================
+# [แก้ไข 2026-05-25]: เปลี่ยน reply_message → push_message
+# เหตุผล: reply_token หมดอายุหลัง 30 วินาที OCR อาจใช้เวลานานกว่า
+# =================================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
     # [Showtime fix]: ตรวจ state showtime_mode → ถ้า active ให้ pause การประมวลสลิป
     if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
@@ -1497,11 +1497,11 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
             else:
                 success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit แล้วเลือก ID ที่ต้องการ"
             
-            # [แก้ไข 2026-05-25]: ใช้ push_message แทน reply_message
-            # เพราะ reply_token หมดอายุแล้ว (OCR ใช้เวลา)
+            # [แก้ไข]: ใช้ push_message แทน reply_message
+            # เพราะ reply_token อาจหมดอายุแล้ว
             line_bot_api.push_message(user_id, TextSendMessage(text=success_msg))
         else:
-            # [แก้ไข 2026-05-25]: ใช้ push_message แทน reply_message
+            # [แก้ไข]: ใช้ push_message แทน reply_message
             line_bot_api.push_message(user_id, TextSendMessage(
                 text="⚠️ ไม่พบจำนวนเงินในรูป หรือไม่ใช่สลิปการเงิน\n\n"
                      "📌 ลองบันทึกด้วยข้อความ เช่น 'บอล ค่าเหล้า 500'\n"
@@ -1591,6 +1591,9 @@ def handle_image(event):
     line_bot_api.reply_message(reply_token, TextSendMessage(text="📸 รับรูปสลิปเรียบร้อย กำลังอ่าน OCR...\n⏳ รอสักครู่"))
     threading.Thread(target=process_slip, args=(event.message.id, trip['id'], user_id, group_id, None)).start()
     
+# =================================================================
+# [แก้ไข 2026-05-25]: แก้ syntax error
+# =================================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
     app.run(host="0.0.0.0", port=port, debug=False)
