@@ -1463,6 +1463,7 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
                  "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
         ))
         return
+    
     try:
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
@@ -1486,6 +1487,7 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
                 "item_name": item_name
             }).execute()
             
+            # ดึง ID ของรายการที่เพิ่ม
             new_id = result.data[0]['id'] if result.data else None
             
             success_msg = f"✅ บันทึกจำนวนเงิน {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"
@@ -1496,11 +1498,13 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
             else:
                 success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit แล้วเลือก ID ที่ต้องการ"
             
-            # [แก้ไข]: ใช้ push_message แทน reply_message
-            line_bot_api.push_message(user_id, TextSendMessage(text=success_msg))
+            # [แก้ไข]: หา target_id ที่เหมาะสม (ส่งไปกลุ่มถ้าอยู่ในกลุ่ม)
+            target_id = group_id if group_id else user_id
+            line_bot_api.push_message(target_id, TextSendMessage(text=success_msg))
         else:
-            # [แก้ไข]: ใช้ push_message แทน reply_message
-            line_bot_api.push_message(user_id, TextSendMessage(
+            # [แก้ไข]: หา target_id ที่เหมาะสม
+            target_id = group_id if group_id else user_id
+            line_bot_api.push_message(target_id, TextSendMessage(
                 text="⚠️ ไม่พบจำนวนเงินในรูป หรือไม่ใช่สลิปการเงิน\n\n"
                      "📌 ลองบันทึกด้วยข้อความ เช่น 'บอล ค่าเหล้า 500'\n"
                      "✏️ หรือพิมพ์ 'edit' เพื่อแก้ไขภายหลัง"
@@ -1508,7 +1512,9 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
     except Exception as e:
         logger.error(f"Process slip error: {e}")
         try:
-            line_bot_api.push_message(user_id, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้ กรุณาลองใหม่"))
+            # [แก้ไข]: หา target_id ที่เหมาะสม
+            target_id = group_id if group_id else user_id
+            line_bot_api.push_message(target_id, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้ กรุณาลองใหม่"))
         except Exception as push_err:
             logger.error(f"Push error message failed: {push_err}")
             
