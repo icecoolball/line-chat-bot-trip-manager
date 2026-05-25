@@ -1463,7 +1463,6 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
                  "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
         ))
         return
-    
     try:
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
@@ -1593,8 +1592,6 @@ def handle_image(event):
 # =================================================================
 # [แก้ไข 2026-05-25]: แก้ syntax error
 # =================================================================
-# แก้จาก: if name == "main":
-# เป็น:
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
     app.run(host="0.0.0.0", port=port, debug=False)
