@@ -1565,7 +1565,8 @@ if text == "ประวัติ" or text_lower == "history":
 def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
     # [Showtime fix]: ตรวจ state showtime_mode
     if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
-        line_bot_api.push_message(user_id, TextSendMessage(
+        target_id = group_id if group_id else user_id
+        line_bot_api.push_message(target_id, TextSendMessage(
             text="⏸️ กำลังอยู่ในโหมด Showtime\n\n"
                  "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
         ))
@@ -1594,7 +1595,6 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
                 "item_name": item_name
             }).execute()
             
-            # ดึง ID ของรายการที่เพิ่ม
             new_id = result.data[0]['id'] if result.data else None
             
             success_msg = f"✅ บันทึกจำนวนเงิน {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"
@@ -1619,12 +1619,11 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
     except Exception as e:
         logger.error(f"Process slip error: {e}")
         try:
-            # [แก้ไข]: หา target_id ที่เหมาะสม
             target_id = group_id if group_id else user_id
             line_bot_api.push_message(target_id, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้ กรุณาลองใหม่"))
         except Exception as push_err:
             logger.error(f"Push error message failed: {push_err}")
-            
+
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     user_id = event.source.user_id
@@ -1632,9 +1631,7 @@ def handle_image(event):
     reply_token = event.reply_token
     
     # [Showtime fix]: ตรวจสอบ showtime_mode ก่อน
-    state = get_state(user_id) # แก้ไข: ใช้ get_state
-    
-    if state and state.get("action") == "showtime_mode":
+    if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         try:
             message_content = line_bot_api.get_message_content(event.message.id)
             image_bytes = b''.join(message_content.iter_content())
@@ -1645,7 +1642,7 @@ def handle_image(event):
             showtime_list = extract_showtime(text_detected)
             
             if showtime_list:
-                if state.get("edit_mode"): # แก้ไข: ใช้ state
+                if get_state(user_id).get("edit_mode"):
                     existing = load_showtime()
                     schedule = existing.get("schedule", [])
                     
@@ -1668,9 +1665,9 @@ def handle_image(event):
                     msg += format_showtime_message()
                     msg += "\n\n📝 พิมพ์เพิ่มเติม หรือ 'save' เพื่อสิ้นสุดการแก้ไข"
                 else:
-                    # เก็บไว้ใน state ชั่วคราว
+                    state = get_state(user_id)
                     state["showtime_temp"] = showtime_list
-                    set_state(user_id, state) # แก้ไข: ใช้ set_state อัปเดต state เดิม
+                    set_state(user_id, state)
                 
                     msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 **ตารางการแสดง:**\n\n"
                     for item in showtime_list:
@@ -1694,12 +1691,12 @@ def handle_image(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่ พิมพ์ 'ทริป ชื่อทริป' เพื่อเริ่มทริป"))
         return
 
+    # [แก้ไข 2026-05-25]: ตอบกลับทันทีเพื่อป้องกัน reply_token หมดอายุ
     line_bot_api.reply_message(reply_token, TextSendMessage(text="📸 รับรูปสลิปเรียบร้อย กำลังอ่าน OCR...\n⏳ รอสักครู่"))
     threading.Thread(target=process_slip, args=(event.message.id, trip['id'], user_id, group_id, None)).start()
-    
+
 # =================================================================
-# [แก้ไข 2026-05-25]: แก้ syntax error
-# เปลี่ยนจาก if name == "main": เป็น if __name__ == "__main__":
+# [แก้ไข 2026-05-25]: แก้ syntax error บรรทัดสุดท้าย
 # =================================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
