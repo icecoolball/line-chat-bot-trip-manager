@@ -1172,39 +1172,6 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
         return
         
-# =============================================================
-# 6. พิมพ์ จบทริป หรือ end trip - ปิดทริปและคำนวณหาร (รองรับ Currency)
-# =============================================================
-if text.startswith("จบทริป") or text_lower.startswith("end trip"):
-    trip = get_active_trip(user_id, group_id)
-    if not trip:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
-        return
-
-    currency_code = "THB"
-    if text.startswith("จบทริป"):
-        parts = text.split()
-        if len(parts) >= 2:
-            currency_code = parts[1].upper()
-    elif text_lower.startswith("end trip"):
-        parts = text_lower.split()
-        if len(parts) >= 3:
-            currency_code = parts[2].upper()
-
-    # แก้ไข: ใช้ set_state
-    set_state(user_id, {
-        "action": "end_trip",
-        "trip_id": trip['id'],
-        "trip_title": trip['title'],
-        "currency_code": currency_code
-    })
-
-    if currency_code != "THB":
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n💱 แปลงเป็นสกุล: {currency_code}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
-    else:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
-    return
-    
     # =============================================================
     # 6.1 รับจำนวนคนหลังจากจบทริป (รองรับ Currency + Debt Settlement)
     # [แก้ไข 2026-05-25]: เพิ่ม Algorithm คำนวณว่าใครต้องโอนให้ใคร
@@ -1377,40 +1344,39 @@ if text.startswith("จบทริป") or text_lower.startswith("end trip"):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
-# =============================================================
-# ดูประวัติทริปทั้งหมด (Active + Closed)
-# =============================================================
-if text == "ประวัติ" or text_lower == "history":
-    try:
-        res = supabase.table("trips").select("*").order("created_at", desc=True).limit(10).execute()
-        all_trips = res.data if res.data else []
-        
-        if not all_trips:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ยังไม่มีประวัติทริป"))
-            return
-        
-        msg = "📜 **ประวัติทริป (10 ทริปล่าสุด):**\n\n"
-        for i, trip in enumerate(all_trips, 1):
-            status_icon = "🟢" if trip['status'] == 'active' else "🔴"
-            start_date = trip.get('created_at', '')[:10]
-            end_date = trip.get('updated_at', '')[:10] if trip['status'] == 'closed' else "ยังไม่จบ"
+    # =============================================================
+    # ดูประวัติทริปทั้งหมด (Active + Closed)
+    # =============================================================
+    if text == "ประวัติ" or text_lower == "history":
+        try:
+            res = supabase.table("trips").select("*").order("created_at", desc=True).limit(10).execute()
+            all_trips = res.data if res.data else []
             
-            msg += f"{i}. {status_icon} {trip['title']}\n"
-            msg += f"   📅 {start_date} → {end_date}\n"
-            msg += f"   👉 พิมพ์: excel {i}\n\n"
-        
-        # แก้ไข: ใช้ set_state
-        set_state(user_id, {"action": "export_history", "trips": all_trips})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
-    except Exception as e:
-        logger.error(f"History error: {e}")
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถดึงข้อมูลได้"))
-    return
+            if not all_trips:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ยังไม่มีประวัติทริป"))
+                return
+            
+            msg = "📜 **ประวัติทริป (10 ทริปล่าสุด):**\n\n"
+            for i, trip in enumerate(all_trips, 1):
+                status_icon = "🟢" if trip['status'] == 'active' else "🔴"
+                start_date = trip.get('created_at', '')[:10]
+                end_date = trip.get('updated_at', '')[:10] if trip['status'] == 'closed' else "ยังไม่จบ"
+                
+                msg += f"{i}. {status_icon} {trip['title']}\n"
+                msg += f"   📅 {start_date} → {end_date}\n"
+                msg += f"   👉 พิมพ์: excel {i}\n\n"
+            
+            set_state(user_id, {"action": "export_history", "trips": all_trips})
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        except Exception as e:
+            logger.error(f"History error: {e}")
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถดึงข้อมูลได้"))
+        return
 
     # =============================================================
     # [แก้ไข 2026-05-22]: รับเลขเลือกทริปจากประวัติเพื่อ export
     # =============================================================
-    state = get_state(user_id) # แก้ไข: ใช้ get_state
+    state = get_state(user_id)
     if state and state.get("action") == "export_history":
         parts = text_lower.split()
         if len(parts) == 2 and parts[0] == "excel":
@@ -1453,10 +1419,8 @@ if text == "ประวัติ" or text_lower == "history":
             clear_state(user_id)
             return
         else:
-            clear_state(user_id)
-        else:
             # ถ้าพิมพ์อย่างอื่นที่ไม่ใช่ "excel [เลข]" ให้ยกเลิก state
-            clear_state(user_id) 
+            clear_state(user_id)
             
     # =============================================================
     # 7. บันทึกค่าใช้จ่ายด้วยข้อความ (ชื่อ รายการ จำนวนเงิน)
