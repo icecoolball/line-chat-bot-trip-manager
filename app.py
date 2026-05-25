@@ -1418,6 +1418,9 @@ def handle_text(event):
 
     # =============================================================
     # 9.1 รับเลข event ที่เลือกหยุด
+    # [แก้ไข 2026-05-25]: เปลี่ยนจาก save_schedules (ที่เป็น pass) 
+    # เป็น update_schedule_active() เพื่อยิงเข้า Supabase โดยตรง
+    # แก้ Bug ที่ทำให้ stop event ไม่ทำงานจริง
     # =============================================================
     if get_state(user_id) and get_state(user_id).get("action") == "stop_event":
         try:
@@ -1425,13 +1428,14 @@ def handle_text(event):
             events = get_state(user_id)["events"]
             if 0 <= choice < len(events):
                 selected = events[choice]
-                schedules = load_schedules()
-                for s in schedules:
-                    if s.get('id') == selected.get('id'):
-                        s['active'] = False
-                        break
-                save_schedules(schedules)
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
+                
+                # [แก้ไข]: เรียก update_schedule_active โดยตรง ไม่ต้องวนลูป
+                # update_schedule_active จะยิง UPDATE ไป Supabase ตาราง schedules
+                # โดยตั้ง active = False ทำให้ event นี้ไม่ถูกแจ้งเตือนอีก
+                if update_schedule_active(selected.get('id'), False):
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
+                else:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาดในการปิดงาน กรุณาลองใหม่"))
             else:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง กรุณาลองใหม่"))
         except ValueError as e:
@@ -1442,17 +1446,22 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาด กรุณาลองใหม่"))
         clear_state(user_id)
         return
-
+    
 # =============================================================
 # 10. รองรับรูปภาพสลิป/บิล
+# [แก้ไข 2026-05-25]: เปลี่ยน reply_message → push_message ทั้งหมด
+# เหตุผล: OCR อาจใช้เวลานาน reply_token หมดอายุก่อนส่งข้อความกลับ
 # =============================================================
-def process_slip(message_id, trip_id, user_id, group_id, reply_token):
+def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
     # [Showtime fix]: ตรวจ state showtime_mode → ถ้า active ให้ pause การประมวลสลิป
     if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
-        line_bot_api.reply_message(reply_token, TextSendMessage(
-            text="⏸️ กำลังอยู่ในโหมด Showtime\n\n"
-                 "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
-        ))
+        try:
+            line_bot_api.push_message(user_id, TextSendMessage(
+                text="⏸️ กำลังอยู่ในโหมด Showtime\n\n"
+                     "พิมพ์ 'save' เพื่อบันทึก showtime และกลับมายังโหมดปกติ"
+            ))
+        except Exception as e:
+            logger.error(f"Push message error (showtime pause): {e}")
         return
     
     try:
@@ -1489,17 +1498,22 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token):
             else:
                 success_msg += f"\n\n✏️ หากยอดไม่ถูกต้อง พิมพ์: edit แล้วเลือก ID ที่ต้องการ"
             
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
+            # [แก้ไข]: ใช้ push_message แทน reply_message
+            line_bot_api.push_message(user_id, TextSendMessage(text=success_msg))
         else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(
+            # [แก้ไข]: ใช้ push_message แทน reply_message
+            line_bot_api.push_message(user_id, TextSendMessage(
                 text="⚠️ ไม่พบจำนวนเงินในรูป หรือไม่ใช่สลิปการเงิน\n\n"
                      "📌 ลองบันทึกด้วยข้อความ เช่น 'บอล ค่าเหล้า 500'\n"
                      "✏️ หรือพิมพ์ 'edit' เพื่อแก้ไขภายหลัง"
             ))
     except Exception as e:
         logger.error(f"Process slip error: {e}")
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้ กรุณาลองใหม่"))
-
+        try:
+            line_bot_api.push_message(user_id, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้ กรุณาลองใหม่"))
+        except Exception as push_err:
+            logger.error(f"Push error message failed: {push_err}")
+            
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     # [Bug 4 fix]: ส่ง group_id เข้า get_active_trip เพื่อให้ user ทุกคนในกลุ่มส่งสลิปได้
@@ -1546,7 +1560,10 @@ def handle_image(event):
                     msg += "\n\n📝 พิมพ์เพิ่มเติม หรือ 'save' เพื่อสิ้นสุดการแก้ไข"
                 else:
                     # [Showtime fix]: normal mode → เก็บไว้ใน state ชั่วคราว รอ user พิมพ์ save
-                    get_state(user_id)["showtime_temp"] = showtime_list
+                    state = get_state(user_id)
+                    state["showtime_temp"] = showtime_list
+                    set_state(user_id, state)  # บันทึกกลับ
+                
                     msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 **ตารางการแสดง:**\n\n"
                     for item in showtime_list:
                         msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
@@ -1568,8 +1585,12 @@ def handle_image(event):
     if not trip:
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่ พิมพ์ 'ทริป ชื่อทริป' เพื่อเริ่มทริป"))
         return
-    threading.Thread(target=process_slip, args=(event.message.id, trip['id'], user_id, group_id, reply_token)).start()
-
+    
+    # [แก้ไข 2026-05-25]: ตอบกลับทันทีเพื่อป้องกัน reply_token หมดอายุ
+    # จากนั้นใช้ push_message ใน process_slip แทน
+    line_bot_api.reply_message(reply_token, TextSendMessage(text="📸 รับรูปสลิปเรียบร้อย กำลังอ่าน OCR...\n⏳ รอสักครู่"))
+    threading.Thread(target=process_slip, args=(event.message.id, trip['id'], user_id, group_id, None)).start()
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
     app.run(host="0.0.0.0", port=port, debug=False)
