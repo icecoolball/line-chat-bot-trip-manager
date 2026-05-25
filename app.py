@@ -1206,10 +1206,10 @@ if text.startswith("จบทริป") or text_lower.startswith("end trip"):
     return
     
     # =============================================================
-    # 6.1 รับจำนวนคนหลังจากจบทริป (รองรับ Currency)
+    # 6.1 รับจำนวนคนหลังจากจบทริป (รองรับ Currency + Debt Settlement)
+    # [แก้ไข 2026-05-25]: เพิ่ม Algorithm คำนวณว่าใครต้องโอนให้ใคร
     # =============================================================
-    state = get_state(user_id) # แก้ไข: ใช้ get_state
-    if state and state.get("action") == "end_trip":
+    if get_state(user_id) and get_state(user_id).get("action") == "end_trip":
         try:
             num_people = int(text)
             if num_people <= 0:
@@ -1222,9 +1222,9 @@ if text.startswith("จบทริป") or text_lower.startswith("end trip"):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
             return
         
-        trip_id = state["trip_id"]
-        trip_title = state["trip_title"]
-        currency_code = state.get("currency_code", "THB")
+        trip_id = get_state(user_id)["trip_id"]
+        trip_title = get_state(user_id)["trip_title"]
+        currency_code = get_state(user_id).get("currency_code", "THB")
         
         total, user_totals = get_total_expenses(trip_id)
         
@@ -1235,6 +1235,7 @@ if text.startswith("จบทริป") or text_lower.startswith("end trip"):
         
         avg = total / num_people
         
+        # ดึงอัตราแลกเปลี่ยนถ้าไม่ใช่ THB
         exchange_rate = 1
         if currency_code != "THB":
             rate = get_exchange_rate("THB", currency_code)
@@ -1243,6 +1244,54 @@ if text.startswith("จบทริป") or text_lower.startswith("end trip"):
             else:
                 currency_code = "THB"
         
+        # --- Debt Settlement Algorithm ---
+        # คำนวณ Balance ของแต่ละคน (จ่ายไป - ควรจ่าย)
+        balances = {}
+        for uid, amt in user_totals.items():
+            balances[uid] = amt - avg
+        
+        # แยกกลุ่ม เจ้าหนี้ (+) และ ลูกหนี้ (-)
+        creditors = [] # คนที่ควรได้รับเงิน
+        debtors = []   # คนที่ต้องจ่ายเงิน
+        
+        for uid, bal in balances.items():
+            name = get_display_name(uid, group_id)
+            if bal > 1: # ทศนิยมเล็กน้อยตัดทิ้ง
+                creditors.append({"uid": uid, "name": name, "amount": bal})
+            elif bal < -1:
+                debtors.append({"uid": uid, "name": name, "amount": abs(bal)})
+                
+        # Sort เพื่อให้จับคู่ได้เร็วขึ้น (Optional: Greedy approach)
+        creditors.sort(key=lambda x: x['amount'], reverse=True)
+        debtors.sort(key=lambda x: x['amount'], reverse=True)
+        
+        transactions = []
+        i, j = 0, 0
+        while i < len(creditors) and j < len(debtors):
+            creditor = creditors[i]
+            debtor = debtors[j]
+            
+            # ยอดที่โอนได้คือค่าต่ำสุดระหว่างสิ่งที่เจ้าหนี้ต้องการ กับ สิ่งที่ลูกหนี้มี
+            amount = min(creditor['amount'], debtor['amount'])
+            
+            if amount > 1: # กรองยอดเล็กๆ น้อยๆ
+                transactions.append({
+                    "from": debtor['name'],
+                    "to": creditor['name'],
+                    "amount": amount
+                })
+            
+            # หักยอดออกจากทั้งสองฝ่าย
+            creditor['amount'] -= amount
+            debtor['amount'] -= amount
+            
+            # ถ้าฝ่ายไหนยอดหมดแล้ว ขยับไปคนถัดไป
+            if creditor['amount'] < 1:
+                i += 1
+            if debtor['amount'] < 1:
+                j += 1
+                
+        # --- สร้างข้อความสรุป ---
         msg = f"🚀 ทริป: {trip_title}\n"
         msg += f"👥 จำนวนคน: {num_people}\n\n"
         
@@ -1254,27 +1303,39 @@ if text.startswith("จบทริป") or text_lower.startswith("end trip"):
         else:
             msg += f"📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n\n"
         
+        # แสดงยอดสุทธิ (จ่ายเพิ่ม/รับคืน)
         msg += f"💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
-        
         for uid, amt in user_totals.items():
             name = get_display_name(uid, group_id)
             diff = amt - avg
             
             if currency_code != "THB" and exchange_rate != 1:
                 if diff > 0:
-                    msg += f"• {name}: รับคืน {diff:,.2f} บาท (≈ {diff * exchange_rate:,.2f} {currency_code})\n"
+                    msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
                 elif diff < 0:
-                    msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท (≈ {abs(diff) * exchange_rate:,.2f} {currency_code})\n"
-                else:
-                    msg += f"• {name}: เรียบร้อยแล้ว\n"
+                    msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
             else:
                 if diff > 0:
                     msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
                 elif diff < 0:
                     msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
-                else:
-                    msg += f"• {name}: เรียบร้อยแล้ว\n"
+                    
+        msg += "\n=======================\n"
+        msg += "🔄 **คำแนะนำการโอนเงิน (เพื่อปิดยอด):**\n"
         
+        if not transactions:
+            msg += "✅ ทุกคนจ่ายครบถ้วนแล้ว ไม่ต้องโอนเพิ่ม"
+        else:
+            for t in transactions:
+                amount_str = f"{t['amount']:,.2f}"
+                if currency_code != "THB" and exchange_rate != 1:
+                    amount_str += f" บาท (≈ {t['amount'] * exchange_rate:,.2f} {currency_code})"
+                else:
+                    amount_str += " บาท"
+                    
+                msg += f"👉 {t['from']} โอนให้ {t['to']} จำนวน {amount_str}\n"
+    
+        # ปิดทริปและบันทึกสกุลเงินที่ใช้
         try:
             supabase.table("trips").update({"status": "closed", "currency_code": currency_code}).eq("id", trip_id).execute()
         except Exception as e:
@@ -1283,6 +1344,7 @@ if text.startswith("จบทริป") or text_lower.startswith("end trip"):
         clear_state(user_id)
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
+
     # =================================================================
     # [แก้ไข 2026-05-22]: Command Excel และ ประวัติ
     # =================================================================
