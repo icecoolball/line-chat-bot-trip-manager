@@ -6,3 +6,4 @@ google-auth
 supabase
 pandas
 openpyxl
+APScheduler
