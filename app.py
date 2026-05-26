@@ -677,7 +677,7 @@ def handle_text(event):
         clear_state(user_id)
         return
 
-    # --- BLOCK 2: Normal Commands ---
+    # --- BLOCK 2: Normal Commands (ตรวจสอบคำสั่งมาตรฐานก่อนเสมอเพื่อเลี่ยงการชนกับตัวประมวลผลค่าใช้จ่าย) ---
     if text_lower == "showtime":
         if state and state.get("action") == "showtime_mode":
             line_bot_api.reply_message(reply_token, [TextSendMessage(text=format_showtime_message()), build_showtime_menu_flex(state.get("end_date"))])
@@ -768,7 +768,7 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "showtime_mode":
-        allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "ยกเลิก", "cancel", "end showtime", "stop showtime"]
+        allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "stop showtime"]
         if text_lower not in allowed and text not in allowed:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⏸️ ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง"))
             return
@@ -1121,30 +1121,6 @@ def handle_text(event):
         else:
             clear_state(user_id)
 
-    # --- BLOCK 3: Enhanced Expense Parsing ---
-    if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel")) and \
-       not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel")):
-        trip = get_active_trip(user_id, group_id)
-        if trip and not (state and state.get("action") == "showtime_mode"):
-            default_payer = get_display_name(user_id, group_id)
-            payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
-            if amount and amount > 0:
-                if not supabase: return
-                try:
-                    supabase.table("expenses").insert({
-                        "trip_id": trip['id'], "line_user_id": user_id,
-                        "payer_name": payer,
-                        "amount": amount, "item_name": item or "ค่าใช้จ่าย",
-                        "currency": currency, "tag": tag, "participants": participants, "slip_url": None
-                    }).execute()
-                    curr_txt = f" {currency}" if currency != "THB" else ""
-                    tag_txt = f" ({tag})" if tag else ""
-                    ppl_txt = " ".join(participants or [])
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer}\nหาร: {ppl_txt}"))
-                except Exception as e:
-                    logger.error(f"Save expense error: {e}")
-            return
-
     if text_lower == "event":
         events = get_active_events()
         base_url = "https://line-chat-bot-trip-manager.onrender.com"
@@ -1188,6 +1164,28 @@ def handle_text(event):
             logger.error(f"Stop event error: {e}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาด กรุณาลองใหม่"))
         clear_state(user_id)
+        return
+
+    # --- BLOCK 3: Enhanced Expense Parsing (ตัวกรองค่าใช้จ่ายภาษาไทยขั้นสูง ย้ายลงมาล่างสุด) ---
+    trip = get_active_trip(user_id, group_id)
+    if trip and not (state and state.get("action") == "showtime_mode"):
+        default_payer = get_display_name(user_id, group_id)
+        payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
+        if amount and amount > 0:
+            if not supabase: return
+            try:
+                supabase.table("expenses").insert({
+                    "trip_id": trip['id'], "line_user_id": user_id,
+                    "payer_name": payer,
+                    "amount": amount, "item_name": item or "ค่าใช้จ่าย",
+                    "currency": currency, "tag": tag, "participants": participants, "slip_url": None
+                }).execute()
+                curr_txt = f" {currency}" if currency != "THB" else ""
+                tag_txt = f" ({tag})" if tag else ""
+                ppl_txt = " ".join(participants or [])
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer}\nหาร: {ppl_txt}"))
+            except Exception as e:
+                logger.error(f"Save expense error: {e}")
         return
 
 # === ImageMessage Handler ===
