@@ -27,11 +27,22 @@ logger = logging.getLogger(__name__)
 line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
 handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
 
-creds_dict = json.loads(os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON'))
-creds = service_account.Credentials.from_service_account_info(creds_dict)
-vision_client = vision.ImageAnnotatorClient(credentials=creds)
+creds_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+if creds_json:
+    creds_dict = json.loads(creds_json)
+    creds = service_account.Credentials.from_service_account_info(creds_dict)
+    vision_client = vision.ImageAnnotatorClient(credentials=creds)
+else:
+    logger.error("❌ GOOGLE_APPLICATION_CREDENTIALS_JSON missing")
+    vision_client = None
 
-supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_ANON_KEY"))
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_ANON_KEY")
+if supabase_url and supabase_key:
+    supabase: Client = create_client(supabase_url, supabase_key)
+else:
+    logger.error("❌ Supabase environment variables missing")
+    supabase = None
 
 user_state = {}
 STATE_TIMEOUT_SECONDS = 600
@@ -65,7 +76,7 @@ def clear_state(user_id):
     user_state.pop(user_id, None)
 
 # =================================================================
-# Flex Message Builders [Req 2, 4]
+# Flex Message Builders
 # =================================================================
 def build_main_menu_flex():
     return FlexSendMessage(alt_text="เมนูคำสั่ง", contents=BubbleContainer(
@@ -116,9 +127,10 @@ def build_report_flex(title, subtitle, lines, alt_text="รายงาน"):
     )
 
 # =================================================================
-# Showtime Management [Req 3, 8]
+# Showtime Management
 # =================================================================
 def load_showtime():
+    if not supabase: return {"schedule": [], "last_updated": None}
     try:
         res = supabase.table("showtimes").select("*").execute()
         schedule = res.data if res.data else []
@@ -128,6 +140,7 @@ def load_showtime():
         return {"schedule": [], "last_updated": None}
 
 def save_showtime(showtime_data):
+    if not supabase: return False
     try:
         supabase.table("showtimes").delete().neq("id", 0).execute()
         schedule = showtime_data.get("schedule", [])
@@ -160,11 +173,11 @@ def format_showtime_message():
     return msg
 
 # =================================================================
-# Currency & Expense Helpers [Req 1, 5, 6, 7, 12]
+# Currency & Expense Helpers
 # =================================================================
 CURRENCY_RATES = {"THB": 1, "JPY": 0.23, "USD": 34.5, "KRW": 0.025}
 _RATE_CACHE = {}
-_RATE_CACHE_TTL_SECONDS = 60 * 30
+_RATE_CACHE_TTL_SECONDS = 1800
 
 def get_exchange_rate(from_curr, to_curr):
     if from_curr == to_curr: return 1.0
@@ -215,11 +228,6 @@ def _parse_amount_token(token):
         return None
 
 def parse_enhanced_expense(text, default_payer_name=None):
-    """
-    รองรับ 2 รูปแบบ:
-    1) "ชื่อคน ค่า... 300 THB #ค่า... ชื่อคน ปาค เอ็ม"
-    2) "ค่า... 300 บาท #ค่า... ชื่อคน ปาค เอ็ม" (คนจ่าย = คนที่พิมพ์)
-    """
     raw = (text or "").strip()
     if not raw: return None, None, None, None, None, None
     parts = [p for p in raw.split() if p.strip()]
@@ -329,9 +337,10 @@ def extract_showtime(text):
     return showtime_list
 
 # =================================================================
-# Core DB Functions [Req 9]
+# Core DB Functions
 # =================================================================
 def get_active_trip(user_id, group_id=None):
+    if not supabase: return None
     try:
         if group_id:
             res = supabase.table("trips").select("*").eq("status", "active").eq("line_group_id", group_id).order("created_at", desc=True).limit(1).execute()
@@ -350,12 +359,14 @@ def get_display_name(user_id, group_id=None):
     except: return user_id[:8]
 
 def get_all_expenses(trip_id):
+    if not supabase: return []
     try:
         res = supabase.table("expenses").select("*").eq("trip_id", trip_id).order("id", desc=False).execute()
         return res.data if res.data else []
     except: return []
 
 def update_expense_amount(expense_id, new_amount):
+    if not supabase: return False
     try:
         supabase.table("expenses").update({"amount": new_amount}).eq("id", expense_id).execute()
         return True
@@ -391,6 +402,7 @@ def compute_trip_balances_thb(trip_id, group_id=None):
     return total_thb, paid_totals, share_totals, people
 
 def load_schedules():
+    if not supabase: return []
     try:
         res = supabase.table("schedules").select("*").order("created_at", desc=True).execute()
         return res.data if res.data else []
@@ -434,13 +446,14 @@ def export_trip_to_excel(trip_id, trip_title):
     except Exception as e: return None, str(e)
 
 def upload_excel_to_supabase(file_buffer, filename):
+    if not supabase: return None, "Supabase client not initialized"
     try:
         supabase.storage.from_("trip-exports").upload(path=filename, file=file_buffer.getvalue(), file_options={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "upsert": "true"})
         return supabase.storage.from_("trip-exports").get_public_url(filename), None
     except Exception as e: return None, str(e)
 
 # =================================================================
-# API Endpoints [Req 10, 13]
+# API Endpoints
 # =================================================================
 @app.route("/api/event-time", methods=["GET"])
 def get_event_time():
@@ -472,6 +485,7 @@ def config_status():
 
 @app.route("/api/schedules", methods=["GET", "POST"])
 def handle_schedules():
+    if not supabase: return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
     if request.method == "GET":
         schedules = load_schedules()
         formatted = [{"id": str(s["id"]), "targetId": s.get("target_id", ""), "buyerName": s.get("buyer_name", ""), "name": s.get("name", ""), "url": s.get("url", ""), "saleTime": s.get("sale_time", ""), "site": s.get("site", ""), "active": s.get("active", True), "createdAt": s.get("created_at", "")} for s in schedules]
@@ -488,6 +502,7 @@ def handle_schedules():
 
 @app.route("/api/schedules/<schedule_id>", methods=["DELETE"])
 def delete_schedule(schedule_id):
+    if not supabase: return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
     try:
         supabase.table("schedules").delete().eq("id", schedule_id).execute()
         return jsonify({"ok": True})
@@ -498,7 +513,6 @@ def get_server_time():
     import time
     return jsonify({"ok": True, "serverTime": int(time.time() * 1000)})
 
-# [Req 10] Cron: Auto-End Showtime + Showtime Alerts (run every 1 minute)
 @app.route("/api/check-showtime", methods=["POST"])
 def check_showtime_cron():
     auth = request.headers.get("Authorization", "")
@@ -552,9 +566,9 @@ def check_showtime_cron():
             break
     return jsonify({"ok": True, "ended": ended, "alerted": alerted, "serverTime": now.isoformat()})
 
-# [Req 13] Daily Summary Cron Endpoint (9:00 AM Thai time = 02:00 UTC)
 @app.route("/api/daily-summary", methods=["POST"])
 def daily_summary_cron():
+    if not supabase: return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
     auth = request.headers.get("Authorization", "")
     secret = os.getenv("CRON_SECRET", "")
     if secret and auth != f"Bearer {secret}":
@@ -613,7 +627,7 @@ def daily_summary_cron():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 # =================================================================
-# LINE Bot Handlers
+# LINE Bot Handlers (Merged TextMessage Handler)
 # =================================================================
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -632,7 +646,38 @@ def handle_text(event):
     reply_token = event.reply_token
     state = get_state(user_id)
 
-    # === Showtime Commands [Req 3] ===
+    # --- BLOCK 1: Handle Follow-up states for Slip Payer & Participants ---
+    if state and state.get("action") == "wait_slip_payer":
+        payer_name = text
+        if payer_name in ["ฉัน", "ฉันเอง", "me"]:
+            payer_name = get_display_name(user_id, state.get('group_id'))
+        set_state(user_id, {
+            "action": "wait_slip_participants",
+            "message_id": state["message_id"],
+            "trip_id": state["trip_id"],
+            "group_id": state.get("group_id"),
+            "payer_name": payer_name,
+        })
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
+        return
+
+    if state and state.get("action") == "wait_slip_participants":
+        names = [n.strip() for n in text.split() if n.strip()]
+        if not names:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์รายชื่ออย่างน้อย 1 คน"))
+            return
+        my_name = get_display_name(user_id, state.get('group_id'))
+        names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
+        payer_name = state.get("payer_name")
+        
+        threading.Thread(target=process_slip_with_payer, args=(
+            state["message_id"], state["trip_id"], user_id,
+            state.get("group_id"), reply_token, payer_name, names
+        )).start()
+        clear_state(user_id)
+        return
+
+    # --- BLOCK 2: Normal Commands ---
     if text_lower == "showtime":
         if state and state.get("action") == "showtime_mode":
             line_bot_api.reply_message(reply_token, [TextSendMessage(text=format_showtime_message()), build_showtime_menu_flex(state.get("end_date"))])
@@ -643,8 +688,8 @@ def handle_text(event):
 
     if state and state.get("action") == "wait_showtime_date":
         end_date = None
-        if text.strip().lower() != "ข้าม":
-            try: end_date = datetime.strptime(text.strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+        if text_lower != "ข้าม" and text_lower != "skip":
+            try: end_date = datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
             except ValueError:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ รูปแบบวันที่ไม่ถูกต้อง กรุณาใช้ YYYY-MM-DD หรือพิมพ์ 'ข้าม'"))
                 return
@@ -656,7 +701,7 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, [TextSendMessage(text=msg), build_showtime_menu_flex(end_date)])
         return
 
-    if text_lower in ["end showtime", "stop showtime"]:  # [Req 3]
+    if text_lower in ["end showtime", "stop showtime"]:
         if state and state.get("action") == "showtime_mode":
             clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมด Showtime เรียบร้อย\n📸 กลับมารับสลิปปกติแล้วครับ"))
@@ -715,22 +760,19 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบรูปแบบที่ถูกต้อง\n👉 ตัวอย่าง: 13:00-13:50 ROMANCE"))
         return
 
-    # === Menu [Req 2, 4] ===
     if text in ["เมนู", "menu", "help"]:
         if state and state.get("action") == "showtime_mode":
             line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("end_date")))
         else:
-            line_bot_api.reply_message(reply_token, build_main_menu_flex())  # Flex Message
+            line_bot_api.reply_message(reply_token, build_main_menu_flex())
         return
 
-    # === Showtime Guard ===
     if state and state.get("action") == "showtime_mode":
         allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "ยกเลิก", "cancel", "end showtime", "stop showtime"]
         if text_lower not in allowed and text not in allowed:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⏸️ ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง"))
             return
 
-    # === Cancel ===
     if text in ["ยกเลิก", "cancel"]:
         if state:
             action = state.get("action")
@@ -743,7 +785,6 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีโหมดแก้ไขที่กำลังทำงานอยู่"))
         return
 
-    # === Edit Commands ===
     if text_lower.startswith("edit"):
         trip = get_active_trip(user_id, group_id)
         if not trip:
@@ -820,7 +861,6 @@ def handle_text(event):
         clear_state(user_id)
         return
 
-    # === ID Command ===
     if text == "id":
         msg = f"🔑 User ID: {user_id}"
         if group_id: msg += f"\n👥 Group ID: {group_id}"
@@ -828,12 +868,12 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
-    # === Create Trip ===
     if text.startswith("ทริป ") or text_lower.startswith("trip "):
         trip_name = text[5:].strip() if text.startswith("ทริป ") else text[5:].strip()
         if not trip_name:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป"))
             return
+        if not supabase: return
         try:
             supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
             supabase.table("trips").insert({"title": trip_name, "status": "active", "line_group_id": group_id, "creator_id": user_id}).execute()
@@ -843,7 +883,6 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ สร้างทริปไม่สำเร็จ"))
         return
 
-    # === Enhanced 'ยอด' Command [Req 6] ===
     if text == "ยอด" or text_lower == "sum":
         trip = get_active_trip(user_id, group_id)
         if not trip:
@@ -877,7 +916,6 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, build_report_flex(title="ยอดรวมทั้งหมด", subtitle=f"ทริป: {trip.get('title','-')}", lines=lines, alt_text="ยอดรวม"))
         return
 
-    # === Daily Report Multi-Currency [Req 1, 7] ===
     if text_lower.startswith("ยอดวันนี้"):
         parts = text.split()
         if len(parts) > 1:
@@ -939,7 +977,6 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, build_report_flex(title=f"ยอดวันนี้ ({today_str})", subtitle=subtitle, lines=lines, alt_text="ยอดวันนี้"))
         return
 
-    # === End Trip ===
     if text.startswith("จบทริป") or text_lower.startswith("end trip"):
         trip = get_active_trip(user_id, group_id)
         if not trip:
@@ -1003,13 +1040,13 @@ def handle_text(event):
                 if diff > 0: msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
                 elif diff < 0: msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
                 else: msg += f"• {name}: เรียบร้อยแล้ว\n"
-        try: supabase.table("trips").update({"status": "closed", "currency_code": currency_code}).eq("id", trip_id).execute()
+        try:
+            if supabase: supabase.table("trips").update({"status": "closed", "currency_code": currency_code}).eq("id", trip_id).execute()
         except Exception as e: logger.error(f"Close trip error: {e}")
         clear_state(user_id)
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
-    # === Excel Export ===
     if text_lower == "excel":
         trip = get_active_trip(user_id, group_id)
         if not trip:
@@ -1028,8 +1065,8 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สร้างไฟล์ Excel สำเร็จ!\n📊 ทริป: {trip['title']}\n🔗 {public_url}"))
         return
 
-    # === History ===
     if text in ["ประวัติ", "history"]:
+        if not supabase: return
         try:
             res = supabase.table("trips").select("*").order("created_at", desc=True).limit(10).execute()
             all_trips = res.data if res.data else []
@@ -1084,7 +1121,7 @@ def handle_text(event):
         else:
             clear_state(user_id)
 
-    # === Enhanced Expense Recording [Req 5] ===
+    # --- BLOCK 3: Enhanced Expense Parsing ---
     if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel")) and \
        not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel")):
         trip = get_active_trip(user_id, group_id)
@@ -1092,6 +1129,7 @@ def handle_text(event):
             default_payer = get_display_name(user_id, group_id)
             payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
             if amount and amount > 0:
+                if not supabase: return
                 try:
                     supabase.table("expenses").insert({
                         "trip_id": trip['id'], "line_user_id": user_id,
@@ -1107,7 +1145,6 @@ def handle_text(event):
                     logger.error(f"Save expense error: {e}")
             return
 
-    # === Event Commands ===
     if text_lower == "event":
         events = get_active_events()
         base_url = "https://line-chat-bot-trip-manager.onrender.com"
@@ -1135,6 +1172,7 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "stop_event":
+        if not supabase: return
         try:
             choice = int(text_lower) - 1
             events = state["events"]
@@ -1152,15 +1190,16 @@ def handle_text(event):
         clear_state(user_id)
         return
 
-# === Slip Payer Prompt [Req 5] ===
+# === ImageMessage Handler ===
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     user_id = event.source.user_id
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
     state = get_state(user_id)
-    # Showtime OCR
+
     if state and state.get("action") == "showtime_mode":
+        if not vision_client: return
         try:
             message_content = line_bot_api.get_message_content(event.message.id)
             image_bytes = b''.join(message_content.iter_content())
@@ -1192,7 +1231,7 @@ def handle_image(event):
             logger.error(f"Showtime OCR error: {e}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้"))
         return
-    # Normal Slip → Ask Payer [Req 5]
+
     trip = get_active_trip(user_id, group_id)
     if not trip:
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
@@ -1200,41 +1239,8 @@ def handle_image(event):
     set_state(user_id, {"action": "wait_slip_payer", "message_id": event.message.id, "trip_id": trip['id'], "group_id": group_id})
     line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\n👤 กรุณาพิมพ์ชื่อคนที่ต้องรับผิดชอบยอดนี้\n(หรือพิมพ์ 'ฉัน' เพื่อใช้ชื่อคุณ)"))
 
-# Handle Slip Payer Name [Req 5]
-@handler.add(MessageEvent, message=TextMessage)
-def handle_slip_payer_followup(event):
-    state = get_state(event.source.user_id)
-    # step 1: รับชื่อคนจ่าย
-    if state and state.get("action") == "wait_slip_payer":
-        payer_name = event.message.text.strip()
-        if payer_name.lower() in ["ฉัน", "ฉัน"]:
-            payer_name = get_display_name(event.source.user_id, state.get('group_id'))
-        set_state(event.source.user_id, {
-            "action": "wait_slip_participants",
-            "message_id": state["message_id"],
-            "trip_id": state["trip_id"],
-            "group_id": state.get("group_id"),
-            "payer_name": payer_name,
-        })
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
-        return
-    # step 2: รับรายชื่อคนที่ต้องหาร แล้วค่อยประมวลผลสลิป
-    if state and state.get("action") == "wait_slip_participants":
-        raw = (event.message.text or "").strip()
-        names = [n.strip() for n in raw.split() if n.strip()]
-        if not names:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์รายชื่ออย่างน้อย 1 คน"))
-            return
-        names = [get_display_name(event.source.user_id, state.get('group_id')) if n.lower() in ["ฉัน", "ฉัน"] else n for n in names]
-        payer_name = state.get("payer_name")
-        threading.Thread(target=process_slip_with_payer, args=(
-            state["message_id"], state["trip_id"], event.source.user_id,
-            state.get("group_id"), event.reply_token, payer_name, names
-        )).start()
-        clear_state(event.source.user_id)
-        return
-
 def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants):
+    if not vision_client or not supabase: return
     try:
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
