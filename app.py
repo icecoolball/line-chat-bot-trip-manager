@@ -1910,22 +1910,12 @@ def handle_text(event):
                     logger.error(f"Save expense error: {e}")
                 return
                 
-    # =============================================================
-    # 10. รองรับรูปภาพสลิป/บิล
+# =================================================================
+# 10. รองรับรูปภาพสลิป/บิล
 # [แก้ไข 2026-05-25]: เปลี่ยน reply_message → push_message
 # เหตุผล: reply_token หมดอายุหลัง 30 วินาที OCR อาจใช้เวลานานกว่า
 # =================================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
-    # [แก้ไข 2026-05-26]: ป้องกันสลิปซ้ำ — เช็ค message_id ก่อน process
-    global _processed_slips
-    if message_id in _processed_slips:
-        logger.info(f"Duplicate slip ignored: {message_id}")
-        return
-    _processed_slips.add(message_id)
-    # จำกัดขนาด set ไม่เกิน 500
-    if len(_processed_slips) > 500:
-        _processed_slips = set(list(_processed_slips)[-250:])
-
     # [Showtime fix]: ตรวจ state showtime_mode
     if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         target_id = group_id if group_id else user_id
@@ -1950,13 +1940,13 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
             timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
             item_name = f"บิล {timestamp} (โดย {sender_name})"
             
-            result = create_expense_record(
-                trip_id=trip_id,
-                user_id=user_id,
-                amount=amount,
-                item_name=item_name,
-                slip_url=f"slip_{message_id}"
-            )
+            result = supabase.table("expenses").insert({
+                "trip_id": trip_id,
+                "line_user_id": user_id,
+                "amount": amount,
+                "slip_url": f"slip_{message_id}",
+                "item_name": item_name
+            }).execute()
             
             new_id = result.data[0]['id'] if result.data else None
             
