@@ -1054,14 +1054,14 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text="\n".join(lines)))
         return
     
-    if text_lower.startswith("ยอดวันนี้ "):
-        """แสดงยอดวันนี้พร้อมแปลงสกุลเงินตามที่ระบุ หรือ THB เป็นค่าเริ่มต้น"""
-        parts = text.split()
-        target_curr = "THB"
-        if len(parts) > 1:
-            t = _normalize_currency(parts[1])
-            target_curr = "JPY" if t == "JYP" else (t or parts[1].upper())
-        
+        if text == "ยอดวันนี้" or text_lower == "ยอดวันนี้" or text_lower.startswith("ยอดวันนี้ "):
+            parts = text.split()
+            if len(parts) > 1:
+                target_curr = _normalize_currency(parts[1]) or parts[1].upper()
+                if target_curr == "JYP": target_curr = "JPY"
+            else:
+                target_curr = "THB"
+            
         today_str = (datetime.now() + timedelta(hours=7)).strftime("%Y-%m-%d")
         trip = get_active_trip(user_id, group_id)
         if not trip:
