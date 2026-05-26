@@ -1107,28 +1107,28 @@ if text == "ยอดวันนี้" or text_lower == "ยอดวันน
     if currency_totals:
         cur_lines = [f"{c} {float(v):,.2f}" for c, v in sorted(currency_totals.items())]
         subtitle_parts.append("💱 ยอดตามสกุล: " + " | ".join(cur_lines))
-    if target_curr != "THB":
-        subtitle_parts.append(f"1 THB = {rate_to_target:.4f} {target_curr}")
-        subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท (≈ {total_target:,.2f} {target_curr})")
-    else:
-        subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท")
-
-    lines = []
-    for tag, data in sorted(categories.items()):
-        ppl_str = " ".join(sorted(data['participants']))
-        line = f"{tag} {data['total_thb']:,.0f} {ppl_str}"
         if target_curr != "THB":
-            converted = data['total_thb'] * rate_to_target
-            line += f" (≈ {converted:,.2f} {target_curr})"
-        lines.append(line)
+            subtitle_parts.append(f"1 THB = {rate_to_target:.4f} {target_curr}")
+            subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท (≈ {total_target:,.2f} {target_curr})")
+        else:
+            subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท")
 
-    line_bot_api.reply_message(reply_token, build_report_flex(
-        title=f"📅 ยอดวันนี้ ({today_str})",
-        subtitle="\n".join(subtitle_parts),
-        lines=lines,
-        alt_text="ยอดวันนี้"
-    ))
-    return
+        lines = []
+        for tag, data in sorted(categories.items()):
+            ppl_str = " ".join(sorted(data['participants']))
+            line = f"{tag} {data['total_thb']:,.0f} {ppl_str}"
+            if target_curr != "THB":
+                converted = data['total_thb'] * rate_to_target
+                line += f" (≈ {converted:,.2f} {target_curr})"
+            lines.append(line)
+    
+        line_bot_api.reply_message(reply_token, build_report_flex(
+            title=f"📅 ยอดวันนี้ ({today_str})",
+            subtitle="\n".join(subtitle_parts),
+            lines=lines,
+            alt_text="ยอดวันนี้"
+        ))
+        return
     
     
     if text.startswith("จบทริป") or text_lower.startswith("end trip"):
@@ -1381,7 +1381,8 @@ if text == "ยอดวันนี้" or text_lower == "ยอดวันน
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer}\nหาร: {ppl_txt}"))
             except Exception as e:
                 logger.error(f"Save expense error: {e}")
-        return    
+            return    
+        
 # === ImageMessage Handler ===
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
