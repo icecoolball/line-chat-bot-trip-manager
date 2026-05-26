@@ -83,46 +83,64 @@ def clear_state(user_id):
 
 # แก้ไขฟังก์ชันนี้เพื่อแก้เมนูขึ้น "..."
 def build_main_menu_flex():
-    """สร้าง Flex Message สำหรับเมนูหลัก - ปรับโครงสร้าง BubbleContainer ให้ถูกต้อง"""
+    """สร้าง Flex Message สำหรับเมนูหลัก - เพิ่ม size='mega' และปรับ layout"""
     return FlexSendMessage(
         alt_text="เมนูคำสั่ง",
         contents=BubbleContainer(
-            # เพิ่ม size='nano' หรือ 'mega' เพื่อป้องกันแสดงเป็น ...
-            size='nano',
-            body=BoxComponent(layout='vertical', spacing='sm', contents=[
-                TextComponent(text='📋 Trip Manager', weight='bold', size='xl', align='center', color='#1DB446'),
-                TextComponent(text='เลือกคำสั่งที่ต้องการใช้งาน', size='sm', color='#999999', align='center', margin='md')
-            ]),
-            footer=BoxComponent(layout='vertical', spacing='sm', flex=0, contents=[
-                ButtonComponent(style='primary', color='#1DB446', height='sm', action=MessageAction(label='🚀 สร้างทริป', text='ทริป ')),
-                ButtonComponent(style='secondary', height='sm', action=MessageAction(label='💰 ยอดรวม', text='ยอด')),
-                ButtonComponent(style='secondary', height='sm', action=MessageAction(label='✏️ แก้ไข', text='edit')),
-                ButtonComponent(style='secondary', height='sm', action=MessageAction(label='🎤 Showtime', text='showtime')),
-                ButtonComponent(style='secondary', height='sm', action=MessageAction(label='❓ เมนู', text='เมนู'))
-            ])
+            size='mega',  # ✅ เพิ่มบรรทัดนี้ (nano, micro, kilo, mega, giga)
+            body=BoxComponent(
+                layout='vertical',
+                spacing='md',
+                contents=[
+                    TextComponent(text='📋 Trip Manager', weight='bold', size='xl', align='center', color='#1DB446'),
+                    TextComponent(text='เลือกคำสั่งที่ต้องการใช้งาน', size='sm', color='#999999', align='center', wrap=True)
+                ]
+            ),
+            footer=BoxComponent(
+                layout='vertical',  # ✅ เปลี่ยนจาก horizontal เป็น vertical
+                spacing='sm',
+                flex=0,
+                contents=[
+                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='🚀 สร้างทริป', text='ทริป ')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='💰 ยอดรวม', text='ยอด')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='✏️ แก้ไข', text='edit')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='🎤 Showtime', text='showtime')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='❓ เมนู', text='เมนู'))
+                ]
+            )
         )
     )
-
+    
 # แก้ไขฟังก์ชันนี้เช่นเดียวกัน
 def build_showtime_menu_flex(end_date=None):
-    """สร้าง Flex Message สำหรับ Showtime Menu - เพิ่ม size และปรับ layout"""
+    """สร้าง Flex Message สำหรับ Showtime Menu - เพิ่ม size='mega'"""
     info_text = f"สิ้นสุด: {end_date}" if end_date else "ไม่ได้กำหนดวันสิ้นสุด"
     return FlexSendMessage(
         alt_text="Showtime Menu",
         contents=BubbleContainer(
-            size='nano',  # เพิ่มบรรทัดนี้เพื่อแก้เมนูขึ้น ...
-            body=BoxComponent(layout='vertical', spacing='sm', contents=[
-                TextComponent(text='🎤 Showtime Mode', weight='bold', size='xl', color='#FF5551', align='center'),
-                TextComponent(text=f'สถานะ: เปิดอยู่\n{info_text}', size='sm', wrap=True, align='center', color='#666666', margin='md')
-            ]),
-            footer=BoxComponent(layout='vertical', spacing='sm', flex=0, contents=[
-                ButtonComponent(style='primary', color='#1DB446', height='sm', action=MessageAction(label='💾 บันทึก & ออก', text='save')),
-                ButtonComponent(style='secondary', height='sm', action=MessageAction(label='👁️ ดูตาราง', text='showtime')),
-                ButtonComponent(style='secondary', height='sm', action=MessageAction(label='✏️ แก้ไขข้อความ', text='editshowtime')),
-                ButtonComponent(style='danger', height='sm', action=MessageAction(label='🛑 จบ Showtime', text='end showtime'))  # เปลี่ยน style เป็น danger
-            ])
+            size='mega',  # ✅ เพิ่มบรรทัดนี้
+            body=BoxComponent(
+                layout='vertical',
+                spacing='md',
+                contents=[
+                    TextComponent(text='🎤 Showtime Mode', weight='bold', size='xl', color='#FF5551', align='center'),
+                    TextComponent(text=f'สถานะ: เปิดอยู่\n{info_text}', size='sm', wrap=True, align='center', color='#666666', margin='md')
+                ]
+            ),
+            footer=BoxComponent(
+                layout='vertical',  # ✅ เปลี่ยนเป็น vertical
+                spacing='sm',
+                flex=0,
+                contents=[
+                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='💾 บันทึก & ออก', text='save')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='👁️ ดูตาราง', text='showtime')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='✏️ แก้ไขข้อความ', text='editshowtime')),
+                    ButtonComponent(style='danger', height='md', action=MessageAction(label='🛑 จบ Showtime', text='end showtime'))
+                ]
+            )
         )
-    )    
+    )
+    
 def build_report_flex(title, subtitle, lines, alt_text="รายงาน"):
     safe_lines = lines[:12]
     if len(lines) > 12:
