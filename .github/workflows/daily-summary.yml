@@ -3,7 +3,7 @@ on:
   schedule:
     # ทุกวัน 9:00 น. เวลาไทย (UTC+7 = 02:00 UTC)
     - cron: '0 2 * * *'
-  workflow_dispatch: # กดรันเองได้เพื่อทดสอบ
+  workflow_dispatch:
 
 jobs:
   trigger-summary:
@@ -11,6 +11,6 @@ jobs:
     steps:
       - name: Trigger Daily Summary API
         run: |
-          curl -X POST https://YOUR_RAILWAY_APP_URL/api/daily-summary \
+          curl -X POST https://web-production-3120c7.up.railway.app/api/daily-summary \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             -H "Content-Type: application/json"
