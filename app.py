@@ -1347,42 +1347,46 @@ if text == "ยอดวันนี้" or text_lower == "ยอดวันน
         clear_state(user_id)
         return
 
-    # --- BLOCK 3: Enhanced Expense Parsing ---
-    trip = get_active_trip(user_id, group_id)
-    if trip and not (state and state.get("action") == "showtime_mode"):
-        default_payer = get_display_name(user_id, group_id)
-        payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
+# --- BLOCK 3: Enhanced Expense Parsing ---
+trip = get_active_trip(user_id, group_id)
+if trip and not (state and state.get("action") == "showtime_mode"):
+    default_payer = get_display_name(user_id, group_id)
+    payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
+     
+    if amount and amount > 0:
+        # ✅ ถ้าไม่มีรายชื่อผู้หาร ให้เก็บ state แล้วถาม
+        if not participants:
+            set_state(user_id, {
+                "action": "wait_expense_participants",  # ใช้ action ใหม่
+                "trip_id": trip['id'], "group_id": group_id,
+                "payer_name": payer,  # แก้จาก "payer" เป็น "payer_name"
+                "item": item, "amount": amount, 
+                "currency": currency, "tag": tag
+            })
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
+            return  # ✅ return นี้ถูกต้อง - อยู่ภายใน if
         
-        if amount and amount > 0:
-            # ✅ ถ้าไม่มีรายชื่อผู้หาร ให้เก็บ state แล้วถาม
-            if not participants:
-                set_state(user_id, {
-                    "action": "wait_expense_participants",  # ใช้ action ใหม่
-                    "trip_id": trip['id'], "group_id": group_id,
-                    "payer_name": payer,  # แก้จาก "payer" เป็น "payer_name"
-                    "item": item, "amount": amount, 
-                    "currency": currency, "tag": tag
-                })
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
-                return
-            
-            # บันทึกทันทีถ้ามีชื่อครบ
-            if not supabase: return
-            try:
-                supabase.table("expenses").insert({
-                    "trip_id": trip['id'], "line_user_id": user_id,
-                    "payer_name": payer,
-                    "amount": amount, "item_name": item or "ค่าใช้จ่าย",
-                    "currency": currency, "tag": tag, "participants": participants, "slip_url": None
-                }).execute()
-                curr_txt = f" {currency}" if currency != "THB" else ""
-                tag_txt = f" ({tag})" if tag else ""
-                ppl_txt = " ".join(participants or [])
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer}\nหาร: {ppl_txt}"))
-            except Exception as e:
-                logger.error(f"Save expense error: {e}")
-            return    
+        # บันทึกทันทีถ้ามีชื่อครบ
+        if not supabase: 
+            return  # ✅ return นี้ถูกต้อง - อยู่ภายใน if
         
+        try:
+            supabase.table("expenses").insert({
+                "trip_id": trip['id'], "line_user_id": user_id,
+                "payer_name": payer,
+                "amount": amount, "item_name": item or "ค่าใช้จ่าย",
+                "currency": currency, "tag": tag, "participants": participants, "slip_url": None
+            }).execute()
+            curr_txt = f" {currency}" if currency != "THB" else ""
+            tag_txt = f" ({tag})" if tag else ""
+            ppl_txt = " ".join(participants or [])
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer}\nหาร: {ppl_txt}"))
+        except Exception as e:
+            logger.error(f"Save expense error: {e}")
+        # ✅ ลบ return บรรทัดนี้ออก หรือย้ายเข้าไปอยู่ใน if amount and amount > 0:
+    # ✅ ต้องมี return ที่นี่ (เยื้องเท่ากับ if trip)
+    return   
+    
 # === ImageMessage Handler ===
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
