@@ -11,13 +11,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # =================================================================
 import pandas as pd
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, abort, render_template, send_from_directory, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, ImageMessage, TextMessage,
-    TextSendMessage, QuickReply, QuickReplyButton, MessageAction
+    TextSendMessage, QuickReply, QuickReplyButton, MessageAction, FlexSendMessage
 )
 from google.cloud import vision
 from google.oauth2 import service_account
@@ -56,6 +56,7 @@ SHOWTIME_CACHE_TTL = 300  # 5 นาที
 # ป้องกันส่งสลิปซ้ำแล้วบันทึก 2 ครั้ง
 # =================================================================
 _processed_slips = set()  # เก็บ message_id ที่ประมวลผลแล้ว (max ~500)
+_showtime_group_warned = False
 
 # =================================================================
 # [แก้ไข 2026-05-23]: State Management พร้อม timeout 10 นาที
@@ -82,6 +83,10 @@ def get_state(user_id):
 def clear_state(user_id):
     """ลบ state"""
     user_state.pop(user_id, None)
+
+def make_group_state_key(prefix, user_id, group_id=None):
+    """สร้าง key state แบบ group-aware: ถ้าอยู่ในกลุ่มให้ใช้ group_id ร่วมกัน"""
+    return f"{prefix}:{group_id if group_id else user_id}"
 
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-22]: ฟังก์ชัน Showtime Management
@@ -523,10 +528,12 @@ def send_menu(reply_token):
     msg += "🔑 **id** - แสดง User ID และ Group ID\n"
     msg += "🚀 **ทริป [ชื่อ]** - สร้างทริปใหม่\n"
     msg += "💰 **ยอด** - แสดงยอดรวมค่าใช้จ่าย\n"
+    msg += "📆 **ยอดวันนี้** - แสดงยอดเฉพาะวันนี้ + อัตราแลกเปลี่ยน\n"
+    msg += "👤 **ยอด @ชื่อ** - แสดงยอดเฉพาะคน เช่น ยอด @บอล\n"
     msg += "🏁 **จบทริป** - ปิดทริปและคำนวณหาร\n"
     msg += "✏️ **edit** - แก้ไขยอดเงิน (แสดงรายการเรียงตามยอดน้อยไปมาก พร้อม ID 4 หลัก)\n"
     msg += "✏️ **edit [ID] [จำนวน]** - แก้ไขทันที เช่น edit 0042 500\n"
-    msg += "🗑️ **ลบ [ID]** - ลบรายการ เช่น ลบ 42 หรือ del 42\n"
+    msg += "🗑️ **ลบ [ID]** - ขอคอนเฟิร์มก่อนลบรายการ\n"
     msg += "📅 **event** - แสดง Event ที่ตั้งค่าไว้\n"
     msg += "🛑 **stop event** - หยุดการแจ้งเตือน Event\n"
     msg += "📸 **ส่งรูปสลิป/บิล** - OCR อ่านยอดอัตโนมัติ\n"
@@ -665,13 +672,18 @@ def extract_amount(text):
     return None
 
 def parse_expense_text(text):
-    """แยกชื่อ รายการ และจำนวนเงิน เช่น 'บอล ค่าเบียร์ 2000 บาท'
+    """แยกชื่อ รายการ จำนวนเงิน และหมวดหมู่ เช่น 'บอล ค่าเบียร์ 2000 บาท #เหล้า'
     [แก้ไข 2026-05-23]:
     - ต้องมีสกุลเงินต่อท้ายเสมอ เช่น บาท, ฿, THB, USD, JPY, ...
     - กรอง 555/5555 (หัวเราะ)
     - ดึงตัวเลขสุดท้ายก่อนสกุลเงิน
     """
     stripped = text.strip()
+    category = None
+    category_matches = re.findall(r'#([^\s#]+)', stripped)
+    if category_matches:
+        category = category_matches[-1].strip()
+        stripped = re.sub(r'\s*#[^\s#]+', '', stripped).strip()
     tokens = stripped.split()
     if not tokens:
         return None, None, None
@@ -700,7 +712,27 @@ def parse_expense_text(text):
     item_parts = [t for t in tokens[1:] if not re.match(r'^[\d,\.]+$', t) and not re.match(CURRENCIES, t, re.IGNORECASE)]
     item = ' '.join(item_parts) or "ค่าใช้จ่าย"
 
-    return name, item, amount
+    return name, item, amount, category
+
+def create_expense_record(trip_id, user_id, amount, item_name, slip_url=None, category=None, exchange_rate_snapshot=None):
+    """บันทึกรายการค่าใช้จ่าย โดยรองรับ schema ใหม่และ fallback ได้ถ้ายังไม่ได้เพิ่มคอลัมน์"""
+    payload = {
+        "trip_id": trip_id,
+        "line_user_id": user_id,
+        "amount": amount,
+        "item_name": item_name,
+        "slip_url": slip_url
+    }
+    if category:
+        payload["category"] = category
+    if exchange_rate_snapshot is not None:
+        payload["exchange_rate_snapshot"] = exchange_rate_snapshot
+    try:
+        return supabase.table("expenses").insert(payload).execute()
+    except Exception:
+        payload.pop("category", None)
+        payload.pop("exchange_rate_snapshot", None)
+        return supabase.table("expenses").insert(payload).execute()
 
 def get_total_expenses(trip_id):
     """คำนวณยอดรวมและแยกตาม user"""
@@ -718,6 +750,33 @@ def get_total_expenses(trip_id):
     except Exception as e:
         logger.error(f"Get total expenses error: {e}")
         return 0, {}
+
+def build_summary_flex(title, lines, accent="#1DB446"):
+    """สร้าง Flex message แบบง่ายสำหรับสรุปผล"""
+    body_contents = [{
+        "type": "text",
+        "text": title,
+        "weight": "bold",
+        "size": "lg",
+        "wrap": True
+    }]
+    for line in lines:
+        body_contents.append({
+            "type": "text",
+            "text": line,
+            "size": "sm",
+            "wrap": True,
+            "margin": "md"
+        })
+    return FlexSendMessage(
+        alt_text=title,
+        contents={
+            "type": "bubble",
+            "styles": {"header": {"backgroundColor": accent}},
+            "header": {"type": "box", "layout": "vertical", "contents": [{"type": "text", "text": "Trip Bot", "color": "#FFFFFF", "weight": "bold"}]},
+            "body": {"type": "box", "layout": "vertical", "contents": body_contents}
+        }
+    )
 
 def get_active_events():
     """ดึง event ที่กำลัง active จาก schedules"""
@@ -748,8 +807,12 @@ def check_showtime_reminder():
     [เพิ่มใหม่ 2026-05-26]: push message เข้ากลุ่มก่อนศิลปินขึ้น 15 นาที
     ต้องตั้ง SHOWTIME_GROUP_ID ใน Environment Variables
     """
+    global _showtime_group_warned
     group_id = os.getenv("SHOWTIME_GROUP_ID")
     if not group_id:
+        if not _showtime_group_warned:
+            logger.warning("SHOWTIME_GROUP_ID is not set. Showtime reminders are disabled.")
+            _showtime_group_warned = True
         return
     try:
         showtime = load_showtime()
@@ -817,6 +880,8 @@ def handle_text(event):
     user_id = event.source.user_id
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
+    end_trip_state_key = make_group_state_key("end_trip", user_id, group_id)
+    delete_state_key = make_group_state_key("confirm_delete", user_id, None)
 
     # =============================================================
     # 0.1 Showtime: พิมพ์ showtime / update showtime / save
@@ -988,6 +1053,8 @@ def handle_text(event):
                 return
             
     if text == "ยกเลิก" or text_lower == "cancel":
+        clear_state(delete_state_key)
+        clear_state(end_trip_state_key)
         if get_state(user_id):
             if get_state(user_id).get("action") == "showtime_mode":
                 clear_state(user_id)
@@ -1133,6 +1200,22 @@ def handle_text(event):
     # [แก้ไข 2026-05-25]: แก้ไข condition ให้รองรับช่องว่าง 1 ตัว
     # =============================================================
     # [แก้ไข]: ใช้ช่องว่าง 1 ตัว ("ลบ ") แทน 2 ตัว
+    if text_lower in ("ยืนยันลบ", "confirm delete"):
+        delete_state = get_state(delete_state_key)
+        if not delete_state or delete_state.get("action") != "confirm_delete":
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีรายการที่รอยืนยันลบ"))
+            return
+        if delete_expense(delete_state["expense_id"]):
+            line_bot_api.reply_message(reply_token, TextSendMessage(
+                text=f"🗑️ ลบรายการ ID {delete_state['expense_id']:04d} เรียบร้อย\n"
+                     f"📝 {delete_state['item_name'][:40]}\n"
+                     f"💰 {delete_state['amount']:,.2f} บาท"
+            ))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ลบไม่สำเร็จ"))
+        clear_state(delete_state_key)
+        return
+
     if text.startswith("ลบ ") or text_lower.startswith("del "):
         trip = get_active_trip(user_id, group_id)
         if not trip:
@@ -1147,15 +1230,18 @@ def handle_text(event):
                 selected = next((e for e in expenses if e['id'] == del_id), None)
                 
                 if selected:
-                    if delete_expense(del_id):
-                        id_display = f"{del_id:04d}"
-                        line_bot_api.reply_message(reply_token, TextSendMessage(
-                            text=f"🗑️ ลบรายการ ID {id_display} เรียบร้อย\n"
-                                f"📝 {selected['item_name'][:40]}\n"
-                                f"💰 {selected['amount']:,.2f} บาท"
-                        ))
-                    else:
-                        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ลบไม่สำเร็จ"))
+                    set_state(delete_state_key, {
+                        "action": "confirm_delete",
+                        "expense_id": del_id,
+                        "item_name": selected.get("item_name", ""),
+                        "amount": selected.get("amount", 0)
+                    })
+                    line_bot_api.reply_message(reply_token, TextSendMessage(
+                        text=f"⚠️ ยืนยันการลบรายการ ID {del_id:04d}\n"
+                             f"📝 {selected['item_name'][:40]}\n"
+                             f"💰 {selected['amount']:,.2f} บาท\n\n"
+                             "พิมพ์ 'ยืนยันลบ' เพื่อยืนยัน หรือ 'ยกเลิก' เพื่อยกเลิก"
+                    ))
                 else:
                     line_bot_api.reply_message(reply_token, TextSendMessage(
                         text=f"⚠️ ไม่พบรายการ ID {del_id:04d}\nพิมพ์ 'edit' เพื่อดูรายการทั้งหมด"
@@ -1213,6 +1299,71 @@ def handle_text(event):
         return
 
     # =============================================================
+    # 5.1 พิมพ์ ยอด @ชื่อ - แสดงเฉพาะยอดของคนนั้น
+    # =============================================================
+    if text.startswith("ยอด @") or text_lower.startswith("sum @"):
+        trip = get_active_trip(user_id, group_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+        query = text.split("@", 1)[1].strip().lower()
+        if not query:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อ เช่น ยอด @บอล"))
+            return
+        expenses = get_all_expenses(trip["id"])
+        rows = []
+        subtotal = 0
+        for e in expenses:
+            name = get_display_name(e["line_user_id"], group_id)
+            if query in name.lower():
+                subtotal += e["amount"]
+                rows.append(f"• {name}: {e.get('item_name', '-')[:30]} = {e['amount']:,.2f} บาท")
+        if not rows:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ℹ️ ไม่พบรายการของ @{query}"))
+            return
+        lines = [f"ทริป: {trip['title']}"] + rows[:12] + [f"รวม: {subtotal:,.2f} บาท"]
+        line_bot_api.reply_message(reply_token, build_summary_flex(f"ยอด @{query}", lines))
+        return
+
+    # =============================================================
+    # 5.2 พิมพ์ ยอดวันนี้ - เฉพาะรายการวันนี้ + อัตราแลกเปลี่ยน
+    # =============================================================
+    if text == "ยอดวันนี้" or text_lower == "today total":
+        trip = get_active_trip(user_id, group_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+        today = datetime.now().date()
+        expenses = get_all_expenses(trip["id"])
+        today_expenses = []
+        for e in expenses:
+            created = e.get("created_at")
+            if not created:
+                continue
+            try:
+                d = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                d = d.replace(tzinfo=None) + timedelta(hours=7)
+                if d.date() == today:
+                    today_expenses.append(e)
+            except Exception:
+                continue
+        if not today_expenses:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ วันนี้ยังไม่มีรายการค่าใช้จ่าย"))
+            return
+        total = sum(e["amount"] for e in today_expenses)
+        usd_rate = get_exchange_rate("THB", "USD")
+        jpy_rate = get_exchange_rate("THB", "JPY")
+        lines = [f"รวมวันนี้: {total:,.2f} บาท"]
+        if usd_rate:
+            lines.append(f"1 THB = {usd_rate:.4f} USD")
+        if jpy_rate:
+            lines.append(f"1 THB = {jpy_rate:.4f} JPY")
+        for e in today_expenses[:10]:
+            lines.append(f"• {e.get('item_name', '-')[:28]} = {e['amount']:,.2f} บาท")
+        line_bot_api.reply_message(reply_token, build_summary_flex("ยอดวันนี้", lines))
+        return
+
+    # =============================================================
     # 5. พิมพ์ ยอด หรือ sum - แสดงยอดรวมล่าสุด
     # =============================================================
     if text == "ยอด" or text_lower == "sum":
@@ -1230,7 +1381,18 @@ def handle_text(event):
         for uid, amt in user_totals.items():
             name = get_display_name(uid, group_id)
             msg += f"• {name}: {amt:,.2f} บาท\n"
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        expenses = get_all_expenses(trip["id"])
+        category_totals = {}
+        for e in expenses:
+            cat = e.get("category")
+            if cat:
+                category_totals[cat] = category_totals.get(cat, 0) + e.get("amount", 0)
+        if category_totals:
+            msg += "\nแยกตามหมวด:\n"
+            for cat, amt in sorted(category_totals.items(), key=lambda x: x[1], reverse=True):
+                msg += f"#{cat}: {amt:,.2f} บาท\n"
+        lines = [s for s in msg.split("\n") if s.strip()]
+        line_bot_api.reply_message(reply_token, build_summary_flex("สรุปยอดทริป", lines))
         return
 
     # =============================================================
@@ -1255,7 +1417,7 @@ def handle_text(event):
                 currency_code = parts[2].upper()
     
         # เก็บ state ไว้รอจำนวนคน
-        set_state(user_id, {
+        set_state(end_trip_state_key, {
             "action": "end_trip",
             "trip_id": trip['id'],
             "trip_title": trip['title'],
@@ -1272,7 +1434,8 @@ def handle_text(event):
     # 6.1 รับจำนวนคนหลังจากจบทริป (รองรับ Currency + Debt Settlement)
     # [แก้ไข 2026-05-25]: เพิ่ม Algorithm คำนวณว่าใครต้องโอนให้ใคร
     # =============================================================
-    if get_state(user_id) and get_state(user_id).get("action") == "end_trip":
+    end_trip_state = get_state(end_trip_state_key)
+    if end_trip_state and end_trip_state.get("action") == "end_trip":
         try:
             num_people = int(text)
             if num_people <= 0:
@@ -1285,15 +1448,15 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
             return
         
-        trip_id = get_state(user_id)["trip_id"]
-        trip_title = get_state(user_id)["trip_title"]
-        currency_code = get_state(user_id).get("currency_code", "THB")
+        trip_id = end_trip_state["trip_id"]
+        trip_title = end_trip_state["trip_title"]
+        currency_code = end_trip_state.get("currency_code", "THB")
         
         total, user_totals = get_total_expenses(trip_id)
         
         if total == 0:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
-            clear_state(user_id)
+            clear_state(end_trip_state_key)
             return
         
         avg = total / num_people
@@ -1311,7 +1474,7 @@ def handle_text(event):
         # คำนวณ Balance ของแต่ละคน (จ่ายไป - ควรจ่าย)
         balances = {}
         for uid, amt in user_totals.items():
-            balances[uid] = amt - avg
+            balances[uid] = int(round((amt - avg) * 100))
         
         # แยกกลุ่ม เจ้าหนี้ (+) และ ลูกหนี้ (-)
         creditors = [] # คนที่ควรได้รับเงิน
@@ -1319,9 +1482,9 @@ def handle_text(event):
         
         for uid, bal in balances.items():
             name = get_display_name(uid, group_id)
-            if bal > 1: # ทศนิยมเล็กน้อยตัดทิ้ง
+            if bal > 0:
                 creditors.append({"uid": uid, "name": name, "amount": bal})
-            elif bal < -1:
+            elif bal < 0:
                 debtors.append({"uid": uid, "name": name, "amount": abs(bal)})
                 
         # Sort เพื่อให้จับคู่ได้เร็วขึ้น (Optional: Greedy approach)
@@ -1337,11 +1500,13 @@ def handle_text(event):
             # ยอดที่โอนได้คือค่าต่ำสุดระหว่างสิ่งที่เจ้าหนี้ต้องการ กับ สิ่งที่ลูกหนี้มี
             amount = min(creditor['amount'], debtor['amount'])
             
-            if amount > 1: # กรองยอดเล็กๆ น้อยๆ
+            if amount > 0:
+                amount_thb = amount / 100
                 transactions.append({
                     "from": debtor['name'],
                     "to": creditor['name'],
-                    "amount": amount
+                    "amount_thb": amount_thb,
+                    "amount_target": amount_thb * exchange_rate
                 })
             
             # หักยอดออกจากทั้งสองฝ่าย
@@ -1349,9 +1514,9 @@ def handle_text(event):
             debtor['amount'] -= amount
             
             # ถ้าฝ่ายไหนยอดหมดแล้ว ขยับไปคนถัดไป
-            if creditor['amount'] < 1:
+            if creditor['amount'] == 0:
                 i += 1
-            if debtor['amount'] < 1:
+            if debtor['amount'] == 0:
                 j += 1
                 
         # --- สร้างข้อความสรุป ---
@@ -1390,9 +1555,9 @@ def handle_text(event):
             msg += "✅ ทุกคนจ่ายครบถ้วนแล้ว ไม่ต้องโอนเพิ่ม"
         else:
             for t in transactions:
-                amount_str = f"{t['amount']:,.2f}"
+                amount_str = f"{t['amount_thb']:,.2f}"
                 if currency_code != "THB" and exchange_rate != 1:
-                    amount_str += f" บาท (≈ {t['amount'] * exchange_rate:,.2f} {currency_code})"
+                    amount_str += f" บาท (≈ {t['amount_target']:,.2f} {currency_code})"
                 else:
                     amount_str += " บาท"
                     
@@ -1404,8 +1569,8 @@ def handle_text(event):
         except Exception as e:
             logger.error(f"Close trip error: {e}")
             
-        clear_state(user_id)
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        clear_state(end_trip_state_key)
+        line_bot_api.reply_message(reply_token, build_summary_flex(f"🏁 ปิดทริป: {trip_title}", [s for s in msg.split("\n") if s.strip()][:20]))
         return
 
     # =================================================================
@@ -1579,23 +1744,26 @@ def handle_text(event):
     # =============================================================
     if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         return
+    if get_state(end_trip_state_key) and get_state(end_trip_state_key).get("action") == "end_trip":
+        return
 
-    if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel", "ลบ")) and \
-    not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel", "del", "showtime", "save", "update")):
+    if not text.startswith(("ทริป", "ยอด", "ยอดวันนี้", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel", "ลบ", "ยืนยันลบ")) and \
+    not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel", "del", "showtime", "save", "update", "today total", "confirm delete")):
         
         trip = get_active_trip(user_id, group_id)
         if trip:
-            name, item, amount = parse_expense_text(event.message.text.strip())
+            name, item, amount, category = parse_expense_text(event.message.text.strip())
             if amount and amount > 0:
                 try:
                     sender_name = get_display_name(user_id, group_id)
-                    supabase.table("expenses").insert({
-                        "trip_id": trip['id'],
-                        "line_user_id": user_id,
-                        "amount": amount,
-                        "item_name": item or "ค่าใช้จ่าย",
-                        "slip_url": None
-                    }).execute()
+                    create_expense_record(
+                        trip_id=trip["id"],
+                        user_id=user_id,
+                        amount=amount,
+                        item_name=item or "ค่าใช้จ่าย",
+                        slip_url=None,
+                        category=category
+                    )
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึกยอด {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"))
                 except Exception as e:
                     logger.error(f"Save expense error: {e}")
@@ -1641,13 +1809,13 @@ def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
             timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
             item_name = f"บิล {timestamp} (โดย {sender_name})"
             
-            result = supabase.table("expenses").insert({
-                "trip_id": trip_id,
-                "line_user_id": user_id,
-                "amount": amount,
-                "slip_url": f"slip_{message_id}",
-                "item_name": item_name
-            }).execute()
+            result = create_expense_record(
+                trip_id=trip_id,
+                user_id=user_id,
+                amount=amount,
+                item_name=item_name,
+                slip_url=f"slip_{message_id}"
+            )
             
             new_id = result.data[0]['id'] if result.data else None
             
