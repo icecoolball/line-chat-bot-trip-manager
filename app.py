@@ -83,6 +83,20 @@ def get_state(user_id):
 def clear_state(user_id):
     """ลบ state"""
     user_state.pop(user_id, None)
+    
+# =============================================================
+# [เพิ่มใหม่ 2026-05-26]: ฟังก์ชันสร้าง Key สำหรับ State แบบ Group-aware
+# เพื่อป้องกัน State ชนกันระหว่าง User ในกลุ่มเดียวกัน
+# =============================================================
+def make_group_state_key(action, user_id, group_id=None):
+    """
+    สร้าง key สำหรับ state โดยรวม group_id ถ้ามี
+    รูปแบบ: action:user_id:group_id หรือ action:user_id
+    """
+    if group_id:
+        return f"{action}:{user_id}:{group_id}"
+    else:
+        return f"{action}:{user_id}"
 
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-22]: ฟังก์ชัน Showtime Management
