@@ -84,10 +84,6 @@ def clear_state(user_id):
     """ลบ state"""
     user_state.pop(user_id, None)
 
-def make_group_state_key(prefix, user_id, group_id=None):
-    """สร้าง key state แบบ group-aware: ถ้าอยู่ในกลุ่มให้ใช้ group_id ร่วมกัน"""
-    return f"{prefix}:{group_id if group_id else user_id}"
-
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-22]: ฟังก์ชัน Showtime Management
 # ประกาศ state สำหรับควบคุมการทำงาน: active (ปกติ) / showtime_mode (หยุดสลิป)
@@ -174,10 +170,6 @@ def load_schedules():
     except Exception as e:
         logger.error(f"Load schedules error: {e}")
         return []
-
-def save_schedules(schedules):
-    """ไม่ใช้แล้ว - ใช้ insert/update/delete โดยตรงแทน"""
-    pass
 
 def add_schedule(data):
     """เพิ่ม schedule ใหม่"""
@@ -470,12 +462,26 @@ def get_active_trip(user_id, group_id=None):
 
 def get_display_name(user_id, group_id=None):
     """ดึงชื่อผู้ใช้จาก LINE API"""
+# cache ชื่อ user ป้องกัน hit LINE API ซ้ำ (TTL 30 นาที)
+_display_name_cache = {}
+_DISPLAY_NAME_TTL = 1800
+
+def get_display_name(user_id, group_id=None):
+    """ดึงชื่อ user จาก LINE พร้อม cache 30 นาที
+    [แก้ไข 2026-05-26]: cache ป้องกัน hit LINE API ทุกรายการ
+    """
+    cache_key = f"{user_id}:{group_id}"
+    cached = _display_name_cache.get(cache_key)
+    if cached and datetime.now().timestamp() - cached["ts"] < _DISPLAY_NAME_TTL:
+        return cached["name"]
     try:
         if group_id:
             profile = line_bot_api.get_group_member_profile(group_id, user_id)
         else:
             profile = line_bot_api.get_profile(user_id)
-        return profile.display_name
+        name = profile.display_name
+        _display_name_cache[cache_key] = {"name": name, "ts": datetime.now().timestamp()}
+        return name
     except Exception as e:
         logger.error(f"Get display name error for user {user_id}: {e}")
         return user_id[:8]
@@ -500,15 +506,28 @@ def update_expense_amount(expense_id, new_amount):
         return False
 
 def delete_expense(expense_id):
-    """ลบรายการค่าใช้จ่าย
-    [เพิ่มใหม่ 2026-05-23]: รองรับคำสั่ง ลบ [ID]
-    """
+    """ลบรายการค่าใช้จ่าย"""
     try:
         supabase.table("expenses").delete().eq("id", expense_id).execute()
         return True
     except Exception as e:
         logger.error(f"Delete expense error: {e}")
         return False
+
+def get_last_expense(trip_id, user_id):
+    """ดึงรายการล่าสุดของ user ใน trip
+    [เพิ่มใหม่ 2026-05-26]: รองรับ undo ย้อนรายการล่าสุด
+    """
+    try:
+        res = supabase.table("expenses").select("*") \
+            .eq("trip_id", trip_id) \
+            .eq("line_user_id", user_id) \
+            .order("id", desc=True) \
+            .limit(1).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.error(f"Get last expense error: {e}")
+        return None
 
 def send_menu(reply_token):
     """ส่งเมนูคำสั่งทั้งหมดแบบ Quick Reply"""
@@ -534,6 +553,7 @@ def send_menu(reply_token):
     msg += "✏️ **edit** - แก้ไขยอดเงิน (แสดงรายการเรียงตามยอดน้อยไปมาก พร้อม ID 4 หลัก)\n"
     msg += "✏️ **edit [ID] [จำนวน]** - แก้ไขทันที เช่น edit 0042 500\n"
     msg += "🗑️ **ลบ [ID]** - ขอคอนเฟิร์มก่อนลบรายการ\n"
+    msg += "↩️ **undo** - ย้อนรายการล่าสุดของตัวเอง\n"
     msg += "📅 **event** - แสดง Event ที่ตั้งค่าไว้\n"
     msg += "🛑 **stop event** - หยุดการแจ้งเตือน Event\n"
     msg += "📸 **ส่งรูปสลิป/บิล** - OCR อ่านยอดอัตโนมัติ\n"
@@ -541,10 +561,44 @@ def send_menu(reply_token):
     msg += "❌ **ยกเลิก** - ออกจากโหมดแก้ไข\n\n"
     msg += "💡 **คำแนะนำ**: รายการจะเรียงตามยอดเงินจากน้อยไปมาก และแสดง ID 4 หลัก"
     
-    line_bot_api.reply_message(
-        reply_token,
-        TextSendMessage(text=msg, quick_reply=quick_reply)
-    )
+    def button(label, text):
+        return {
+            "type": "button",
+            "style": "primary",
+            "height": "sm",
+            "action": {"type": "message", "label": label, "text": text}
+        }
+
+    contents = {
+        "type": "bubble",
+        "header": {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#1DB446",
+            "contents": [{"type": "text", "text": "Trip Bot Menu", "color": "#FFFFFF", "weight": "bold", "size": "lg"}]
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": [
+                {"type": "text", "text": "เลือกคำสั่ง", "size": "sm", "color": "#555555"},
+                {"type": "separator", "margin": "md"},
+                button("ยอด", "ยอด"),
+                button("ยอดวันนี้", "ยอดวันนี้"),
+                button("จบทริป", "จบทริป"),
+                button("สร้างทริป", "ทริป "),
+                button("แก้ไขยอด", "edit"),
+                button("Event", "event"),
+                button("Stop Event", "stop event"),
+                button("Showtime", "showtime"),
+                button("ID", "id"),
+                button("ยกเลิก", "ยกเลิก"),
+            ]
+        }
+    }
+
+    line_bot_api.reply_message(reply_token, FlexSendMessage(alt_text="Trip Bot Menu", contents=contents))
 
 # =================================================================
 # [อัปเดตล่าสุด 2026-05-21]: ฟังก์ชันอ่าน Showtime จากรูป
@@ -700,6 +754,13 @@ def parse_expense_text(text):
     if not currency_match:
         return None, None, None
 
+    currency_raw = currency_match.group(1)
+    currency = currency_raw.upper()
+    if currency in ("บาท", "฿", "THB"):
+        currency = "THB"
+    if currency == "JYP":
+        currency = "JPY"
+
     # ดึงตัวเลขที่อยู่ก่อนสกุลเงิน
     before_currency = stripped[:currency_match.start()].strip()
     amounts = re.findall(r'(\d+(?:\.\d{1,2})?)', before_currency)
@@ -712,9 +773,9 @@ def parse_expense_text(text):
     item_parts = [t for t in tokens[1:] if not re.match(r'^[\d,\.]+$', t) and not re.match(CURRENCIES, t, re.IGNORECASE)]
     item = ' '.join(item_parts) or "ค่าใช้จ่าย"
 
-    return name, item, amount, category
+    return name, item, amount, category, currency
 
-def create_expense_record(trip_id, user_id, amount, item_name, slip_url=None, category=None, exchange_rate_snapshot=None):
+def create_expense_record(trip_id, user_id, amount, item_name, slip_url=None, category=None, exchange_rate_snapshot=None, original_amount=None, original_currency=None):
     """บันทึกรายการค่าใช้จ่าย โดยรองรับ schema ใหม่และ fallback ได้ถ้ายังไม่ได้เพิ่มคอลัมน์"""
     payload = {
         "trip_id": trip_id,
@@ -727,12 +788,41 @@ def create_expense_record(trip_id, user_id, amount, item_name, slip_url=None, ca
         payload["category"] = category
     if exchange_rate_snapshot is not None:
         payload["exchange_rate_snapshot"] = exchange_rate_snapshot
+    if original_amount is not None:
+        payload["original_amount"] = original_amount
+    if original_currency:
+        payload["original_currency"] = original_currency
     try:
         return supabase.table("expenses").insert(payload).execute()
     except Exception:
         payload.pop("category", None)
         payload.pop("exchange_rate_snapshot", None)
+        payload.pop("original_amount", None)
+        payload.pop("original_currency", None)
         return supabase.table("expenses").insert(payload).execute()
+
+def build_daily_currency_snapshot(expenses):
+    """สรุป snapshot อัตราแลกเปลี่ยนรายวันจากข้อมูล expense ของวันนั้น"""
+    snapshots = {}
+    totals = {}
+    for e in expenses:
+        cur = e.get("original_currency")
+        amt = e.get("original_amount")
+        rate = e.get("exchange_rate_snapshot")
+        if not cur or amt is None:
+            continue
+        totals[cur] = totals.get(cur, 0) + float(amt)
+        if rate is not None:
+            snapshots.setdefault(cur, []).append(float(rate))
+    daily = {}
+    for cur, amts in totals.items():
+        rates = snapshots.get(cur, [])
+        # ใช้ค่าเฉลี่ยของวันนั้นถ้ามีหลาย record
+        daily[cur] = {
+            "original_total": amts,
+            "rate": (sum(rates) / len(rates)) if rates else None
+        }
+    return daily
 
 def get_total_expenses(trip_id):
     """คำนวณยอดรวมและแยกตาม user"""
@@ -1257,6 +1347,29 @@ def handle_text(event):
         return
     
     # =============================================================
+    # 2.6 undo — ย้อนรายการล่าสุดของตัวเอง
+    # [เพิ่มใหม่ 2026-05-26]: ลบรายการล่าสุดทันทีโดยไม่ต้องหา ID
+    # =============================================================
+    if text_lower == "undo":
+        trip = get_active_trip(user_id, group_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+        last = get_last_expense(trip['id'], user_id)
+        if not last:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีรายการที่จะย้อนกลับ"))
+            return
+        if delete_expense(last['id']):
+            line_bot_api.reply_message(reply_token, TextSendMessage(
+                text=f"↩️ ย้อนรายการล่าสุดเรียบร้อย\n"
+                     f"📝 {last['item_name'][:40]}\n"
+                     f"💰 {last['amount']:,.2f} บาท"
+            ))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ย้อนรายการไม่สำเร็จ"))
+        return
+
+    # =============================================================
     # 3. พิมพ์ id - แสดง User ID ของคนพิมพ์ + Group ID
     #    [Bug 1 fix]: แสดง Group ID เพื่อให้ทุกคนในกลุ่มใช้ฟีเจอร์ทริปได้
     #    Group ID ใช้ร่วมกันได้ทั้งกลุ่ม ไม่ต้อง loop สมาชิกทีละคน
@@ -1351,13 +1464,18 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ วันนี้ยังไม่มีรายการค่าใช้จ่าย"))
             return
         total = sum(e["amount"] for e in today_expenses)
-        usd_rate = get_exchange_rate("THB", "USD")
-        jpy_rate = get_exchange_rate("THB", "JPY")
-        lines = [f"รวมวันนี้: {total:,.2f} บาท"]
-        if usd_rate:
-            lines.append(f"1 THB = {usd_rate:.4f} USD")
-        if jpy_rate:
-            lines.append(f"1 THB = {jpy_rate:.4f} JPY")
+        lines = [f"รวมวันนี้ (THB): {total:,.2f} บาท"]
+
+        daily = build_daily_currency_snapshot(today_expenses)
+        if daily:
+            lines.append("อัตราแลกเปลี่ยน (snapshot วันนี้):")
+            for cur, info in sorted(daily.items()):
+                rate = info.get("rate")
+                orig_total = info.get("original_total", 0)
+                if rate:
+                    lines.append(f"• {cur}->THB = {rate:,.4f} | รวม {orig_total:,.2f} {cur}")
+                else:
+                    lines.append(f"• {cur}: รวม {orig_total:,.2f} {cur} (ไม่มี snapshot)")
         for e in today_expenses[:10]:
             lines.append(f"• {e.get('item_name', '-')[:28]} = {e['amount']:,.2f} บาท")
         line_bot_api.reply_message(reply_token, build_summary_flex("ยอดวันนี้", lines))
@@ -1405,7 +1523,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
     
-        # ดึง currency code จาก command (เช่น "จบทริป JPY" หรือ "end trip USD")
+        # ดึง currency code จาก command
         currency_code = "THB"
         if text.startswith("จบทริป"):
             parts = text.split()
@@ -1415,19 +1533,23 @@ def handle_text(event):
             parts = text_lower.split()
             if len(parts) >= 3:
                 currency_code = parts[2].upper()
-    
-        # เก็บ state ไว้รอจำนวนคน
+
+        # [Feature 3 - 2026-05-26]: แสดงยอดรวมก่อน ให้ยืนยันก่อนปิดทริปจริง
+        total, user_totals = get_total_expenses(trip['id'])
+        confirm_msg = f"🏁 ปิดทริป: {trip['title']}\n"
+        confirm_msg += f"📊 ยอดรวมทั้งหมด: {total:,.2f} บาท\n"
+        confirm_msg += f"👥 จำนวนรายการ: {len(get_all_expenses(trip['id']))} รายการ\n"
+        if currency_code != "THB":
+            confirm_msg += f"💱 สกุลเงิน: {currency_code}\n"
+        confirm_msg += "\n👥 ระบุจำนวนคนที่จะหารครับ:"
+
         set_state(end_trip_state_key, {
             "action": "end_trip",
             "trip_id": trip['id'],
             "trip_title": trip['title'],
             "currency_code": currency_code
         })
-    
-        if currency_code != "THB":
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n💱 แปลงเป็นสกุล: {currency_code}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
-        else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n\n👥 ระบุจำนวนคนที่จะหารครับ:"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=confirm_msg))
         return
         
     # =============================================================
@@ -1748,23 +1870,42 @@ def handle_text(event):
         return
 
     if not text.startswith(("ทริป", "ยอด", "ยอดวันนี้", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel", "ลบ", "ยืนยันลบ")) and \
-    not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel", "del", "showtime", "save", "update", "today total", "confirm delete")):
+    not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel", "del", "showtime", "save", "update", "today total", "confirm delete", "undo")):
         
         trip = get_active_trip(user_id, group_id)
         if trip:
-            name, item, amount, category = parse_expense_text(event.message.text.strip())
+            name, item, amount, category, currency = parse_expense_text(event.message.text.strip())
             if amount and amount > 0:
                 try:
                     sender_name = get_display_name(user_id, group_id)
+                    amount_thb = amount
+                    rate_snapshot = None
+                    if currency and currency != "THB":
+                        rate = get_exchange_rate(currency, "THB")
+                        if not rate:
+                            line_bot_api.reply_message(reply_token, TextSendMessage(
+                                text=f"⚠️ ดึงอัตราแลกเปลี่ยน {currency}->THB ไม่สำเร็จ ลองใหม่อีกครั้ง"
+                            ))
+                            return
+                        rate_snapshot = rate
+                        amount_thb = amount * rate
                     create_expense_record(
                         trip_id=trip["id"],
                         user_id=user_id,
-                        amount=amount,
+                        amount=amount_thb,
                         item_name=item or "ค่าใช้จ่าย",
                         slip_url=None,
-                        category=category
+                        category=category,
+                        exchange_rate_snapshot=rate_snapshot,
+                        original_amount=amount if currency and currency != "THB" else None,
+                        original_currency=currency if currency and currency != "THB" else None
                     )
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึกยอด {amount:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"))
+                    if currency and currency != "THB":
+                        line_bot_api.reply_message(reply_token, TextSendMessage(
+                            text=f"✅ บันทึกยอด {amount_thb:,.2f} บาท (จาก {amount:,.2f} {currency}) จากคุณ {sender_name} สำเร็จ!"
+                        ))
+                    else:
+                        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึกยอด {amount_thb:,.2f} บาท จากคุณ {sender_name} สำเร็จ!"))
                 except Exception as e:
                     logger.error(f"Save expense error: {e}")
                 return
