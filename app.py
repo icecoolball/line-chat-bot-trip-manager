@@ -4,6 +4,8 @@ import json
 import logging
 import threading
 import requests
+import hashlib
+from apscheduler.schedulers.background import BackgroundScheduler
 # =================================================================
 # [เพิ่มใหม่ 2026-05-22]: Import สำหรับ Export Excel
 # =================================================================
@@ -43,6 +45,19 @@ user_state = {}
 #SHOWTIME_FILE = "showtime.local.json"
 
 # =================================================================
+# [แก้ไข 2026-05-26]: Showtime cache ป้องกัน query Supabase ทุก request
+# cache หมดอายุทุก 5 นาที
+# =================================================================
+_showtime_cache = {"data": None, "ts": 0}
+SHOWTIME_CACHE_TTL = 300  # 5 นาที
+
+# =================================================================
+# [แก้ไข 2026-05-26]: Slip dedup — เก็บ hash ของรูปที่บันทึกแล้ว
+# ป้องกันส่งสลิปซ้ำแล้วบันทึก 2 ครั้ง
+# =================================================================
+_processed_slips = set()  # เก็บ message_id ที่ประมวลผลแล้ว (max ~500)
+
+# =================================================================
 # [แก้ไข 2026-05-23]: State Management พร้อม timeout 10 นาที
 # สาเหตุ: Render free tier sleep/restart → state หาย → user ค้างโหมด
 # แก้: ทุก state มี timestamp, เกิน 10 นาทีถือว่าหมดอายุ auto-clear
@@ -73,28 +88,41 @@ def clear_state(user_id):
 # ประกาศ state สำหรับควบคุมการทำงาน: active (ปกติ) / showtime_mode (หยุดสลิป)
 # =================================================================
 def load_showtime():
-    """ดึง showtime จาก Supabase แทนการอ่านไฟล์ JSON"""
+    """ดึง showtime จาก Supabase พร้อม cache 5 นาที
+    [แก้ไข 2026-05-26]: cache ป้องกัน query ทุก request
+    """
+    global _showtime_cache
+    now = datetime.now().timestamp()
+    if _showtime_cache["data"] is not None and now - _showtime_cache["ts"] < SHOWTIME_CACHE_TTL:
+        return _showtime_cache["data"]
     try:
         res = supabase.table("showtimes").select("*").execute()
         schedule = res.data if res.data else []
-        return {"schedule": schedule, "last_updated": datetime.now().isoformat()}
+        result = {"schedule": schedule, "last_updated": datetime.now().isoformat()}
+        _showtime_cache = {"data": result, "ts": now}
+        return result
     except Exception as e:
         logger.error(f"Load showtime error: {e}")
         return {"schedule": [], "last_updated": None}
 
+def invalidate_showtime_cache():
+    """เคลียร์ cache เมื่อมีการ save showtime ใหม่"""
+    global _showtime_cache
+    _showtime_cache = {"data": None, "ts": 0}
+
 def save_showtime(showtime_data):
-    """บันทึก showtime ลง Supabase (ลบของเก่าทั้งหมดแล้วเพิ่มใหม่)"""
+    """บันทึก showtime ลง Supabase และ clear cache
+    [แก้ไข 2026-05-26]: clear cache หลัง save เพื่อให้ load ใหม่ทันที
+    """
     try:
-        # ลบข้อมูลเก่าทั้งหมด (id เป็น SERIAL เริ่มต้นที่ 1 ดังนั้น neq 0 จะลบทุกแถว)
         supabase.table("showtimes").delete().neq("id", 0).execute()
-        
-        # เพิ่มข้อมูลใหม่
         schedule = showtime_data.get("schedule", [])
         for item in schedule:
             supabase.table("showtimes").insert({
                 "time": item.get("time", ""),
                 "artist": item.get("artist", "")
             }).execute()
+        invalidate_showtime_cache()  # clear cache
         return True
     except Exception as e:
         logger.error(f"Save showtime error: {e}")
@@ -198,8 +226,10 @@ def get_exchange_rate(from_currency, to_currency):
 # =================================================================
 # [แก้ไข 2026-05-22]: Export Excel Functions - แปลงเวลา UTC → ไทย
 # =================================================================
-def export_trip_to_excel(trip_id, trip_title):
-    """สร้างไฟล์ Excel จากข้อมูลทริป (เวลาไทย UTC+7)"""
+def export_trip_to_excel(trip_id, trip_title, group_id=None):
+    """สร้างไฟล์ Excel จากข้อมูลทริป (เวลาไทย UTC+7)
+    [แก้ไข 2026-05-26]: รับ group_id เพื่อให้ get_display_name ดึงชื่อถูกต้อง
+    """
     try:
         from datetime import timedelta
         
@@ -209,7 +239,8 @@ def export_trip_to_excel(trip_id, trip_title):
         
         data = []
         for exp in expenses:
-            user_name = get_display_name(exp['line_user_id'], None)
+            # [แก้ไข]: ส่ง group_id เพื่อดึงชื่อ user ใน group ได้ถูกต้อง
+            user_name = get_display_name(exp['line_user_id'], group_id)
             created = exp.get('created_at', '')
             
             # [แก้ไข]: แปลงเวลา UTC → เวลาไทย (UTC+7)
@@ -699,6 +730,60 @@ def render_dashboard():
     return render_template("index.html")
 
 # =================================================================
+# [เพิ่ม 2026-05-26]: APScheduler - keep_alive + showtime reminder
+# =================================================================
+def keep_alive():
+    """Ping /health ของตัวเองป้องกัน Railway sleep"""
+    url = os.getenv("RENDER_EXTERNAL_URL")
+    if not url:
+        return
+    try:
+        res = requests.get(f"{url}/health", timeout=10)
+        logger.info(f"Keep-alive ping: {res.status_code}")
+    except Exception as e:
+        logger.warning(f"Keep-alive ping failed: {e}")
+
+def check_showtime_reminder():
+    """แจ้งเตือน 15 นาทีก่อนถึงเวลาแสดง
+    [เพิ่มใหม่ 2026-05-26]: push message เข้ากลุ่มก่อนศิลปินขึ้น 15 นาที
+    ต้องตั้ง SHOWTIME_GROUP_ID ใน Environment Variables
+    """
+    group_id = os.getenv("SHOWTIME_GROUP_ID")
+    if not group_id:
+        return
+    try:
+        showtime = load_showtime()
+        schedule = showtime.get("schedule", [])
+        if not schedule:
+            return
+
+        now = datetime.now()
+        for item in schedule:
+            time_str = item.get("time", "").split('-')[0]  # เอาเวลาเริ่ม
+            try:
+                h, m = map(int, time_str.split(':'))
+                show_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                # ถ้าเวลาแสดงผ่านไปแล้ว (เช่น 00:xx คืนนี้) → ไม่แจ้ง
+                if show_dt < now:
+                    continue
+                diff_minutes = (show_dt - now).total_seconds() / 60
+                # แจ้งเตือนช่วง 14-16 นาทีก่อน (เผื่อ scheduler tick ไม่ตรงพอดี)
+                if 14 <= diff_minutes <= 16:
+                    artist = item.get("artist", "")
+                    msg = f"🎤 อีก 15 นาที!\n⏱️ {item.get('time', '')} | {artist}\nเตรียมตัวได้เลย! 🎵"
+                    line_bot_api.push_message(group_id, TextSendMessage(text=msg))
+                    logger.info(f"Showtime reminder sent: {artist} at {time_str}")
+            except Exception as e:
+                logger.warning(f"Showtime reminder parse error: {time_str} - {e}")
+    except Exception as e:
+        logger.error(f"Showtime reminder error: {e}")
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(keep_alive, "interval", minutes=10, id="keep_alive")
+scheduler.add_job(check_showtime_reminder, "interval", minutes=1, id="showtime_reminder")
+scheduler.start()
+
+# =================================================================
 # [เพิ่ม 2026-05-24]: /health endpoint สำหรับ UptimeRobot ping
 # ให้ UptimeRobot (free) ping URL นี้ทุก 5 นาที → Render ไม่ sleep
 # วิธีตั้ง: https://uptimerobot.com → Add Monitor → HTTP(s)
@@ -734,15 +819,28 @@ def handle_text(event):
     reply_token = event.reply_token
 
     # =============================================================
-    # 0.1 Showtime: พิมพ์ showtime / editshowtime / save / update showtime
+    # 0.1 Showtime: พิมพ์ showtime / update showtime / save
     # [แก้ไข 2026-05-25]: เปลี่ยน user_state -> set_state/get_state
     # =============================================================
     if text_lower == "showtime":
-        # แสดง showtime ล่าสุด และขอให้ส่งรูป
         msg = format_showtime_message()
         msg += "\n\n📸 ส่งรูป Showtime ใหม่เพื่ออัปเดต (bot จะหยุดรับสลิปชั่วคราว)"
-        # แก้ไข: ใช้ set_state
         set_state(user_id, {"action": "showtime_mode"})
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
+    # [เพิ่มใหม่ 2026-05-26]: showtime @ศิลปิน — ค้นหาเวลาแสดงของศิลปิน
+    if text_lower.startswith("showtime @") or text_lower.startswith("showtime@"):
+        query = text.split("@", 1)[-1].strip().lower()
+        showtime = load_showtime()
+        schedule = showtime.get("schedule", [])
+        matches = [item for item in schedule if query in item.get("artist", "").lower()]
+        if matches:
+            msg = f"🔍 ผลค้นหา '{query}':\n\n"
+            for item in matches:
+                msg += f"⏱️ {item.get('time', '-')} | 🎤 {item.get('artist', '-')}\n"
+        else:
+            msg = f"⚠️ ไม่พบ '{query}' ในตาราง Showtime"
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
     
@@ -771,7 +869,7 @@ def handle_text(event):
         return
     
     # editshowtime / update showtime: แก้ไข showtime
-    if text_lower == "editshowtime" or text_lower == "update showtime":
+    if text_lower == "update showtime":
         existing = load_showtime()
         if not existing.get("schedule"):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ยังไม่มี Showtime ให้แก้ไข"))
@@ -841,7 +939,6 @@ def handle_text(event):
             msg = "📋 **Showtime Commands:**\n\n"
             msg += "📺 **showtime** - แสดง Showtime ล่าสุด\n"
             msg += "✏️ **update showtime** - แก้ไข Showtime (พิมพ์หรือส่งรูป)\n"
-            msg += "✏️ **editshowtime** - แก้ไข Showtime\n"
             if get_state(user_id).get("edit_mode"):
                 msg += "📝 **HH:MM-HH:MM ศิลปิน** - เพิ่ม/แก้ไข Showtime (หลายบรรทัดได้)\n"
             msg += "💾 **save** - บันทึก Showtime และออกจาก Function\n"
@@ -880,13 +977,12 @@ def handle_text(event):
             # อนุญาตแค่ showtime commands
             if not (text_lower == "save" or 
                     text_lower == "showtime" or 
-                    text_lower == "editshowtime" or 
                     text_lower == "update showtime" or
                     text == "เมนู" or text_lower == "menu" or
                     text == "ยกเลิก" or text_lower == "cancel"):
                 line_bot_api.reply_message(reply_token, TextSendMessage(
                     text="⏸️ ตอนนี้อยู่ในโหมด Showtime\n\n"
-                        "อนุญาตแค่: showtime, editshowtime, update showtime, save, menu, ยกเลิก\n\n"
+                        "อนุญาตแค่: showtime, update showtime, save, menu, ยกเลิก\n\n"
                         "พิมพ์ 'menu' เพื่อดูคำสั่ง Showtime"
                 ))
                 return
@@ -1079,7 +1175,7 @@ def handle_text(event):
     #    [Bug 1 fix]: แสดง Group ID เพื่อให้ทุกคนในกลุ่มใช้ฟีเจอร์ทริปได้
     #    Group ID ใช้ร่วมกันได้ทั้งกลุ่ม ไม่ต้อง loop สมาชิกทีละคน
     # =============================================================
-    if text == "id":
+    if text_lower == "id":
         msg = f"🔑 [LINE ID Info]\n\n👤 User ID (ของคุณ):\n{user_id}"
         if group_id:
             msg += f"\n\n👥 Group ID (ของกลุ่มนี้):\n{group_id}"
@@ -1325,7 +1421,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         
-        excel_buffer, error = export_trip_to_excel(trip['id'], trip['title'])
+        excel_buffer, error = export_trip_to_excel(trip['id'], trip['title'], group_id)
         if error:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
             return
@@ -1387,7 +1483,7 @@ def handle_text(event):
                 if 0 <= choice < len(trips):
                     selected_trip = trips[choice]
                     
-                    excel_buffer, error = export_trip_to_excel(selected_trip['id'], selected_trip['title'])
+                    excel_buffer, error = export_trip_to_excel(selected_trip['id'], selected_trip['title'], group_id)
                     if error:
                         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
                         clear_state(user_id)
@@ -1427,13 +1523,65 @@ def handle_text(event):
     # [แก้ไข 2026-05-25]: เพิ่ม "ลบ" และ "del" ใน skip list
     # [Showtime fix]: ถ้าอยู่ใน showtime_mode ให้บล็อกการบันทึกยอด
     # =============================================================
-    if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
-        # อยู่ในโหมด showtime → ไม่บันทึกยอด
+    # =============================================================
+    # 8. พิมพ์ event / stop event
+    # [แก้ไข 2026-05-26]: ย้ายขึ้นมาก่อน expense recording ป้องกัน command ถูกดัก
+    # =============================================================
+    if text_lower == "event":
+        events = get_active_events()
+        base_url = os.getenv("RENDER_EXTERNAL_URL", "https://web-production-3120c7.up.railway.app")
+        if not events:
+            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n" + base_url
+        else:
+            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\n"
+            for i, e in enumerate(events, 1):
+                msg += f"{i}. งาน: {e.get('name', '-')}\n⏰ เวลาขาย: {e.get('saleTime', '-')}\n🔗 ลิงก์งาน: {e.get('url', '-')}\n-----------------------\n"
+            msg += f"\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
-    
-    # [แก้ไข]: เพิ่ม "ลบ" และ "del" ใน tuple ด้านล่าง
+
+    if text_lower == "stop event":
+        events = get_active_events()
+        if not events:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี Event ที่กำลังทำงานอยู่"))
+            return
+        set_state(user_id, {"action": "stop_event", "events": events})
+        msg = "🚫 เลือกหมายเลข Event ที่ต้องการหยุด:\n=======================\n"
+        for i, e in enumerate(events, 1):
+            msg += f"{i}. งาน: {e.get('name', '-')}\n🛑 ID: {e.get('id', '-')}\n-----------------------\n"
+        msg += "👉 พิมพ์เลขลำดับเพื่อปิดงาน"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
+    state = get_state(user_id)
+    if state and state.get("action") == "stop_event":
+        try:
+            choice = int(text_lower) - 1
+            events = state["events"]
+            if 0 <= choice < len(events):
+                selected = events[choice]
+                if update_schedule_active(selected.get('id'), False):
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ ปิดงานเรียบร้อย!\n🛑 {selected.get('name', '-')}"))
+                else:
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาด กรุณาลองใหม่"))
+            else:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง"))
+        except ValueError:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์หมายเลขเท่านั้น"))
+        except Exception as e:
+            logger.error(f"Stop event error: {e}")
+        clear_state(user_id)
+        return
+
+    # =============================================================
+    # 9. บันทึกค่าใช้จ่ายด้วยข้อความ
+    # [แก้ไข 2026-05-26]: ย้าย event/stop event ขึ้นไปก่อน
+    # =============================================================
+    if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
+        return
+
     if not text.startswith(("ทริป", "ยอด", "จบทริป", "เมนู", "ยกเลิก", "ประวัติ", "excel", "ลบ")) and \
-    not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel", "del")):
+    not text_lower.startswith(("trip", "sum", "end", "id", "event", "stop", "edit", "menu", "cancel", "history", "excel", "del", "showtime", "save", "update")):
         
         trip = get_active_trip(user_id, group_id)
         if trip:
@@ -1454,79 +1602,21 @@ def handle_text(event):
                 return
                 
     # =============================================================
-    # 8. พิมพ์ event - แสดง event ปัจจุบัน
-    # [แก้ไข 2026-05-25]: เปลี่ยน URL เป็น Railway
-    # =============================================================
-    if text_lower == "event":
-        events = get_active_events()
-        # [แก้ไข]: เปลี่ยนเป็น Railway URL
-        base_url = "https://web-production-3120c7.up.railway.app"
-        
-        if not events:
-            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่ (หรือทุกงานหมดอายุ/ถูกปิดแล้ว)\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n" + base_url
-        else:
-            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\n"
-            for i, e in enumerate(events, 1):
-                msg += f"{i}. งาน: {e.get('name', '-')}\n⏰ เวลาขาย: {e.get('saleTime', '-')}\n🔗 ลิงก์งาน: {e.get('url', '-')}\n-----------------------\n"
-            msg += f"\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
-        
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
-        return        
-    # =============================================================
-    # 9. พิมพ์ stop event - แสดงรายการให้เลือกหยุด
-    # =============================================================
-    if text_lower == "stop event":
-        events = get_active_events()
-        if not events:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี Event ที่กำลังทำงานอยู่"))
-            return
-        
-        set_state(user_id, {"action": "stop_event", "events": events})
-        msg = "🚫 เลือกหมายเลข Event ที่คุณต้องการสั่งหยุดทำงาน (Stop):\n=======================\n"
-        for i, e in enumerate(events, 1):
-            msg += f"{i}. งาน: {e.get('name', '-')}\n🛑 (ID ย่อ: {e.get('id', '-')})\n-----------------------\n"
-        msg += "👉 พิมพ์เฉพาะ [ตัวเลขลำดับ] เพื่อระบุเลือกปิดงานชิ้นนั้นได้เลยครับ"
-        
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
-        return
-
-    # =============================================================
-    # 9.1 รับเลข event ที่เลือกหยุด
-    # [แก้ไข 2026-05-25]: เปลี่ยนจาก save_schedules (ที่เป็น pass) 
-    # เป็น update_schedule_active() เพื่อยิงเข้า Supabase โดยตรง
-    # แก้ Bug ที่ทำให้ stop event ไม่ทำงานจริง
-    # [แก้ไข 2026-05-25]: ใช้ get_state และ update_schedule_active
-    # =============================================================
-    state = get_state(user_id) # แก้ไข: ใช้ get_state
-    if state and state.get("action") == "stop_event":
-        try:
-            choice = int(text_lower) - 1
-            events = state["events"]
-            if 0 <= choice < len(events):
-                selected = events[choice]
-                
-                # ใช้ update_schedule_active โดยตรง
-                if update_schedule_active(selected.get('id'), False):
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}\nสถานะคิวเตือนถูกระงับถาวรเรียบร้อย"))
-                else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาดในการปิดงาน กรุณาลองใหม่"))
-            else:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง กรุณาลองใหม่"))
-        except ValueError as e:
-            logger.warning(f"Stop event invalid input: {text_lower} - {e}")
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์หมายเลขเท่านั้น"))
-        except Exception as e:
-            logger.error(f"Stop event error: {e}")
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาด กรุณาลองใหม่"))
-        clear_state(user_id)
-        return
-    
-# =================================================================
-# 10. รองรับรูปภาพสลิป/บิล
+    # 10. รองรับรูปภาพสลิป/บิล
 # [แก้ไข 2026-05-25]: เปลี่ยน reply_message → push_message
 # เหตุผล: reply_token หมดอายุหลัง 30 วินาที OCR อาจใช้เวลานานกว่า
 # =================================================================
 def process_slip(message_id, trip_id, user_id, group_id, reply_token=None):
+    # [แก้ไข 2026-05-26]: ป้องกันสลิปซ้ำ — เช็ค message_id ก่อน process
+    global _processed_slips
+    if message_id in _processed_slips:
+        logger.info(f"Duplicate slip ignored: {message_id}")
+        return
+    _processed_slips.add(message_id)
+    # จำกัดขนาด set ไม่เกิน 500
+    if len(_processed_slips) > 500:
+        _processed_slips = set(list(_processed_slips)[-250:])
+
     # [Showtime fix]: ตรวจ state showtime_mode
     if get_state(user_id) and get_state(user_id).get("action") == "showtime_mode":
         target_id = group_id if group_id else user_id
