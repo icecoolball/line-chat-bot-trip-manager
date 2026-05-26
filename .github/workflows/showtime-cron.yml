@@ -1,0 +1,15 @@
+name: Showtime Check Cron
+on:
+  schedule:
+    - cron: '2533IceCoolB@llZ' # ทำงานทุก 1 นาที
+  workflow_dispatch:
+
+jobs:
+  trigger-showtime-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Showtime Check API
+        run: |
+          curl -X POST https://web-production-3120c7.up.railway.app/api/check-showtime \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json"
