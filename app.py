@@ -762,36 +762,49 @@ def handle_text(event):
         })
         line_bot_api.reply_message(reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
         return
-
-        # --- วางต่อจากบล็อก wait_slip_participants ที่มีอยู่ ---
-        # เพิ่มบล็อกนี้เพื่อรองรับการรับชื่อผู้หารจากข้อความ (ต้องอินเด้นต์ให้ตรงกับ if ตัวบน)
-        if state and state.get("action") == "wait_expense_participants":
-            """รับรายชื่อผู้หารจากข้อความที่ผู้ใช้พิมพ์ตอบกลับ"""
-            names = [n.strip() for n in text.split() if n.strip()]
-            if not names:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์รายชื่ออย่างน้อย 1 คน"))
-                return
-            my_name = get_display_name(user_id, state.get('group_id'))
-            names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
-            payer_name = state.get("payer_name")
-            
-            if not supabase: return
-            try:
-                supabase.table("expenses").insert({
-                    "trip_id": state["trip_id"], "line_user_id": user_id,
-                    "payer_name": payer_name,
-                    "amount": state["amount"], "item_name": state["item"],
-                    "currency": state["currency"], "tag": state["tag"], "participants": names, "slip_url": None
-                }).execute()
-                curr_txt = f" {state['currency']}" if state['currency'] != "THB" else ""
-                tag_txt = f" ({state['tag']})" if state['tag'] else ""
-                ppl_txt = " ".join(names)
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {state['amount']:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer_name}\nหาร: {ppl_txt}"))
-            except Exception as e:
-                logger.error(f"Save expense error: {e}")
-            clear_state(user_id)
-            return  # ต้องมี return เพื่อจบฟังก์ชัน
+    
+    if state and state.get("action") == "wait_slip_participants":
+        names = [n.strip() for n in text.split() if n.strip()]
+        if not names:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์รายชื่ออย่างน้อย 1 คน"))
+            return
+        my_name = get_display_name(user_id, state.get('group_id'))
+        names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
+        payer_name = state.get("payer_name")
         
+        threading.Thread(target=process_slip_with_payer, args=(
+            state["message_id"], state["trip_id"], user_id,
+            state.get("group_id"), reply_token, payer_name, names
+        )).start()
+        clear_state(user_id)
+        return
+    
+    # ✅ เพิ่มบล็อกใหม่สำหรับข้อความปกติ (ไม่ใช่สลิป)
+    if state and state.get("action") == "wait_expense_participants":
+        names = [n.strip() for n in text.split() if n.strip()]
+        if not names:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์รายชื่ออย่างน้อย 1 คน"))
+            return
+        my_name = get_display_name(user_id, state.get("group_id"))
+        names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
+        
+        if not supabase: return
+        try:
+            supabase.table("expenses").insert({
+                "trip_id": state["trip_id"], "line_user_id": user_id,
+                "payer_name": state["payer_name"],
+                "amount": state["amount"], "item_name": state["item"],
+                "currency": state["currency"], "tag": state["tag"], "participants": names, "slip_url": None
+            }).execute()
+            curr_txt = f" {state['currency']}" if state['currency'] != "THB" else ""
+            tag_txt = f" ({state['tag']})" if state['tag'] else ""
+            ppl_txt = " ".join(names)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {state['amount']:,.2f}{curr_txt}{tag_txt}\nจ่าย: {state['payer_name']}\nหาร: {ppl_txt}"))
+        except Exception as e:
+            logger.error(f"Save expense error: {e}")
+        clear_state(user_id)
+        return
+    
     # --- BLOCK 2: Normal Commands (ตรวจสอบคำสั่งมาตรฐานก่อนเสมอเพื่อเลี่ยงการชนกับตัวประมวลผลค่าใช้จ่าย) ---
     if text_lower == "showtime":
         if state and state.get("action") == "showtime_mode":
@@ -1332,24 +1345,26 @@ def handle_text(event):
         clear_state(user_id)
         return
 
-    # --- BLOCK 3: Enhanced Expense Parsing (ตัวกรองค่าใช้จ่ายภาษาไทยขั้นสูง ย้ายลงมาล่างสุด) ---
+    # --- BLOCK 3: Enhanced Expense Parsing ---
     trip = get_active_trip(user_id, group_id)
     if trip and not (state and state.get("action") == "showtime_mode"):
         default_payer = get_display_name(user_id, group_id)
         payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
         
         if amount and amount > 0:
-            # ถ้าไม่มีรายชื่อผู้หารในข้อความ ให้เก็บ state แล้วถามก่อน
+            # ✅ ถ้าไม่มีรายชื่อผู้หาร ให้เก็บ state แล้วถาม
             if not participants:
                 set_state(user_id, {
-                    "action": "wait_expense_participants",
+                    "action": "wait_expense_participants",  # ใช้ action ใหม่
                     "trip_id": trip['id'], "group_id": group_id,
-                    "payer": payer, "item": item, "amount": amount, "currency": currency, "tag": tag
+                    "payer_name": payer,  # แก้จาก "payer" เป็น "payer_name"
+                    "item": item, "amount": amount, 
+                    "currency": currency, "tag": tag
                 })
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
                 return
             
-            # บันทึกข้อมูลเมื่อมีรายชื่อผู้หารครบถ้วน
+            # บันทึกทันทีถ้ามีชื่อครบ
             if not supabase: return
             try:
                 supabase.table("expenses").insert({
@@ -1358,14 +1373,13 @@ def handle_text(event):
                     "amount": amount, "item_name": item or "ค่าใช้จ่าย",
                     "currency": currency, "tag": tag, "participants": participants, "slip_url": None
                 }).execute()
-                curr_txt = f" {currency}" if currency != "THB" else " "
-                tag_txt = f" ({tag})" if tag else " "
+                curr_txt = f" {currency}" if currency != "THB" else ""
+                tag_txt = f" ({tag})" if tag else ""
                 ppl_txt = " ".join(participants or [])
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer}\nหาร: {ppl_txt}"))
             except Exception as e:
                 logger.error(f"Save expense error: {e}")
-        return
-    
+        return    
 # === ImageMessage Handler ===
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
