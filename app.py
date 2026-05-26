@@ -1054,80 +1054,82 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text="\n".join(lines)))
         return
     
-        if text == "ยอดวันนี้" or text_lower == "ยอดวันนี้" or text_lower.startswith("ยอดวันนี้ "):
-            parts = text.split()
-            if len(parts) > 1:
-                target_curr = _normalize_currency(parts[1]) or parts[1].upper()
-                if target_curr == "JYP": target_curr = "JPY"
-            else:
-                target_curr = "THB"
-            
-        today_str = (datetime.now() + timedelta(hours=7)).strftime("%Y-%m-%d")
-        trip = get_active_trip(user_id, group_id)
-        if not trip:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
-            return
-        
-        expenses = get_all_expenses(trip['id'])
-        today_exp = [e for e in expenses if e.get('created_at', '').startswith(today_str)]
-        if not today_exp:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ℹ️ วันนี้ ({today_str}) ยังไม่มีรายจ่าย"))
-            return
-        
-        total_thb = 0
-        categories = {}
-        currency_totals = {}
-        
-        for exp in today_exp:
-            curr = exp.get('currency', 'THB')
-            currency_totals[curr] = currency_totals.get(curr, 0) + (exp.get('amount') or 0)
-            amt_thb = exp['amount']
-            if curr != 'THB':
-                amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
-            total_thb += amt_thb
-        
-            tag = exp.get('tag') or '#ทั่วไป'
-            if tag not in categories:
-                categories[tag] = {'total_thb': 0, 'participants': set()}
-            categories[tag]['total_thb'] += amt_thb
-        
-            ppl = exp.get('participants') or []
-            if isinstance(ppl, str): ppl = [p.strip() for p in ppl.split() if p.strip()]
-            if not ppl:
-                payer = exp.get('payer_name') or get_display_name(exp['line_user_id'], group_id)
-                ppl = [payer]
-            for p in ppl:
-                if p: categories[tag]['participants'].add(str(p))
-        
-        rate_to_target = get_exchange_rate("THB", target_curr) if target_curr != "THB" else 1.0
-        total_target = total_thb * rate_to_target
-        
-        subtitle_parts = []
-        if currency_totals:
-            cur_lines = [f"{c} {float(v):,.2f}" for c, v in sorted(currency_totals.items())]
-            subtitle_parts.append("💱 ยอดตามสกุล: " + " | ".join(cur_lines))
-        if target_curr != "THB":
-            subtitle_parts.append(f" 1 THB = {rate_to_target:.4f} {target_curr}")
-            subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท (≈ {total_target:,.2f} {target_curr})")
-        else:
-            subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท")
-        
-        lines = []
-        for tag, data in sorted(categories.items()):
-            ppl_str = " ".join(sorted(data['participants']))
-            line = f"{tag} {data['total_thb']:,.0f} {ppl_str}"
-            if target_curr != "THB":
-                converted = data['total_thb'] * rate_to_target
-                line += f" (≈ {converted:,.2f} {target_curr})"
-            lines.append(line)
-        
-        line_bot_api.reply_message(reply_token, build_report_flex(
-            title=f"📅 ยอดวันนี้ ({today_str})",
-            subtitle="\n".join(subtitle_parts),
-            lines=lines,
-            alt_text="ยอดวันนี้"
-        ))
+# แก้ไขบล็อกนี้ใน handle_text function
+if text == "ยอดวันนี้" or text_lower == "ยอดวันนี้" or text_lower.startswith("ยอดวันนี้ "):
+    """แสดงยอดวันนี้พร้อมแปลงสกุลเงิน"""
+    parts = text.split()
+    target_curr = "THB"
+    if len(parts) > 1:
+        t = _normalize_currency(parts[1])
+        target_curr = "JPY" if t == "JYP" else (t or parts[1].upper())
+
+    today_str = (datetime.now() + timedelta(hours=7)).strftime("%Y-%m-%d")
+    trip = get_active_trip(user_id, group_id)
+    if not trip:
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
         return
+
+    expenses = get_all_expenses(trip['id'])
+    today_exp = [e for e in expenses if e.get('created_at', '').startswith(today_str)]
+    if not today_exp:
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ℹ️ วันนี้ ({today_str}) ยังไม่มีรายจ่าย"))
+        return
+
+    total_thb = 0
+    categories = {}
+    currency_totals = {}
+
+    for exp in today_exp:
+        curr = exp.get('currency', 'THB')
+        currency_totals[curr] = currency_totals.get(curr, 0) + (exp.get('amount') or 0)
+        amt_thb = exp['amount']
+        if curr != 'THB':
+            amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
+        total_thb += amt_thb
+
+        tag = exp.get('tag') or '#ทั่วไป'
+        if tag not in categories:
+            categories[tag] = {'total_thb': 0, 'participants': set()}
+        categories[tag]['total_thb'] += amt_thb
+
+        ppl = exp.get('participants') or []
+        if isinstance(ppl, str): ppl = [p.strip() for p in ppl.split() if p.strip()]
+        if not ppl:
+            payer = exp.get('payer_name') or get_display_name(exp['line_user_id'], group_id)
+            ppl = [payer]
+        for p in ppl:
+            if p: categories[tag]['participants'].add(str(p))
+
+    rate_to_target = get_exchange_rate("THB", target_curr) if target_curr != "THB" else 1.0
+    total_target = total_thb * rate_to_target
+
+    subtitle_parts = []
+    if currency_totals:
+        cur_lines = [f"{c} {float(v):,.2f}" for c, v in sorted(currency_totals.items())]
+        subtitle_parts.append("💱 ยอดตามสกุล: " + " | ".join(cur_lines))
+    if target_curr != "THB":
+        subtitle_parts.append(f"1 THB = {rate_to_target:.4f} {target_curr}")
+        subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท (≈ {total_target:,.2f} {target_curr})")
+    else:
+        subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท")
+
+    lines = []
+    for tag, data in sorted(categories.items()):
+        ppl_str = " ".join(sorted(data['participants']))
+        line = f"{tag} {data['total_thb']:,.0f} {ppl_str}"
+        if target_curr != "THB":
+            converted = data['total_thb'] * rate_to_target
+            line += f" (≈ {converted:,.2f} {target_curr})"
+        lines.append(line)
+
+    line_bot_api.reply_message(reply_token, build_report_flex(
+        title=f"📅 ยอดวันนี้ ({today_str})",
+        subtitle="\n".join(subtitle_parts),
+        lines=lines,
+        alt_text="ยอดวันนี้"
+    ))
+    return
+    
     
     if text.startswith("จบทริป") or text_lower.startswith("end trip"):
         trip = get_active_trip(user_id, group_id)
