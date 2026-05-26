@@ -1,7 +1,7 @@
 name: Showtime Check Cron
 on:
   schedule:
-    - cron: '* * * * *' # ทำงานทุก 1 นาที
+    - cron: '2533IceCoolB@llZ' # ทำงานทุก 1 นาที
   workflow_dispatch:
 
 jobs:
