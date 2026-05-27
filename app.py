@@ -286,6 +286,7 @@ def build_showtime_event_list_message():
 def build_showtime_command_text():
     return (
         "📋 เมนู Showtime:\n"
+        "- menu showtime\n"
         "- showtime\n"
         "- showtime [เลข]\n"
         "- เพิ่ม\n"
@@ -822,6 +823,21 @@ def handle_text(event):
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
     state = get_state(user_id)
+    showtime_actions = {
+        "showtime_mode",
+        "wait_showtime_add_confirm",
+        "wait_showtime_event_name",
+        "wait_showtime_date",
+        "wait_end_showtime_event_index",
+        "wait_end_showtime_confirm",
+    }
+
+    if text in ["menu showtime", "showtime menu"]:
+        if state and state.get("action") in showtime_actions:
+            line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("show_date")))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ใช้ 'menu showtime' ได้เฉพาะตอนอยู่ในโหมด Showtime"))
+        return
 
     # --- Follow-up states for Slip ---
     if state and state.get("action") == "wait_slip_payer":
@@ -893,9 +909,6 @@ def handle_text(event):
             return
 
         # --- menu/help/exit ต้อง bypass ทุก state ใน showtime_mode (รวม edit_mode) ---
-        if text in ["menu showtime", "showtime menu"]:
-            line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("show_date")))
-            return
         if text in ["เมนู", "menu", "help"]:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
@@ -1038,9 +1051,6 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_add_confirm":
-        if text in ["menu showtime", "showtime menu"]:
-            line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
-            return
         if text in ["เมนู", "menu", "help"]:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
@@ -1091,9 +1101,6 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_event_name":
-        if text in ["menu showtime", "showtime menu"]:
-            line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
-            return
         if text in ["เมนู", "menu", "help"]:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
@@ -1110,9 +1117,6 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_date":
-        if text in ["menu showtime", "showtime menu"]:
-            line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
-            return
         if text in ["เมนู", "menu", "help"]:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
