@@ -928,7 +928,7 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_end_showtime_confirm":
-        if text_lower == "yes":
+        if text_lower in ["yes", "y"]:
             event_name = state.get("event_name")
             ok = delete_showtime_event(event_name)
             clear_state(user_id)
@@ -956,11 +956,22 @@ def handle_text(event):
 
     if state and state.get("action") == "wait_showtime_add_confirm":
         if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
+            line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมด Showtime แล้ว"))
+            return
+        m_end_direct = re.match(r"^end\s+showtime\s+(\d+)$", text_lower)
+        if m_end_direct:
+            events = state.get("events", []) or list_showtime_events()
+            idx = int(m_end_direct.group(1))
+            if idx < 1 or idx > len(events):
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ เลขไม่ถูกต้อง (1-{len(events)})"))
+                return
+            selected = events[idx - 1]
+            set_state(user_id, {"action": "wait_end_showtime_confirm", "event_name": selected["event_name"]})
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ยืนยันลบ event '{selected['event_name']}' ทั้งหมด?\nพิมพ์ 'yes' เพื่อยืนยัน หรือ 'exit' เพื่อยกเลิก"))
             return
         if text_lower in ["end showtime", "stop showtime"]:
             events = list_showtime_events()
@@ -995,7 +1006,7 @@ def handle_text(event):
 
     if state and state.get("action") == "wait_showtime_event_name":
         if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
+            line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1011,7 +1022,7 @@ def handle_text(event):
 
     if state and state.get("action") == "wait_showtime_date":
         if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
+            line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
