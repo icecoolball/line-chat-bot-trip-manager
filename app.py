@@ -95,15 +95,15 @@ def clear_state(user_id):
 # =================================================================
 def build_main_menu_flex():
     return FlexSendMessage(
-        alt_text="เน€เธกเธเธนเธเธณเธชเธฑเนเธ",
+        alt_text="เมนูคำสั่ง",
         contents=BubbleContainer(
             size='mega',
             body=BoxComponent(
                 layout='vertical',
                 spacing='md',
                 contents=[
-                    TextComponent(text='๐“ Trip Manager', weight='bold', size='xl', align='center', color='#1DB446'),
-                    TextComponent(text='เน€เธฅเธทเธญเธเธเธณเธชเธฑเนเธเธ—เธตเนเธ•เนเธญเธเธเธฒเธฃเนเธเนเธเธฒเธ', size='sm', color='#999999', align='center', wrap=True)
+                    TextComponent(text='📋 Trip Manager', weight='bold', size='xl', align='center', color='#1DB446'),
+                    TextComponent(text='เลือกคำสั่งที่ต้องการใช้งาน', size='sm', color='#999999', align='center', wrap=True)
                 ]
             ),
             footer=BoxComponent(
@@ -111,18 +111,18 @@ def build_main_menu_flex():
                 spacing='sm',
                 flex=0,
                 contents=[
-                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='๐€ เธชเธฃเนเธฒเธเธ—เธฃเธดเธ', text='เธ—เธฃเธดเธ ')),
-                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='๐’ฐ เธขเธญเธ”เธฃเธงเธก', text='เธขเธญเธ”')),
-                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='โ๏ธ เนเธเนเนเธ', text='edit')),
-                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='๐ค Showtime', text='showtime')),
-                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='โ“ เน€เธกเธเธน', text='เน€เธกเธเธน'))
+                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='🚀 สร้างทริป', text='ทริป ')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='💰 ยอดรวม', text='ยอด')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='✏️ แก้ไข', text='edit')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='🎤 Showtime', text='showtime')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='📋 เมนู', text='เมนู'))
                 ]
             )
         )
     )
 
 def build_showtime_menu_flex(show_date=None):
-    info_text = f"๐“… เธงเธฑเธเธ—เธตเนเธเธฑเธ”เนเธชเธ”เธ: {show_date}" if show_date else "เนเธกเนเนเธ”เนเธเธณเธซเธเธ”เธงเธฑเธเธเธฑเธ”เนเธชเธ”เธ"
+    info_text = f"📅 วันที่จัดแสดง: {show_date}" if show_date else "ไม่ได้กำหนดวันที่จัดแสดง"
     return FlexSendMessage(
         alt_text="Showtime Menu",
         contents=BubbleContainer(
@@ -131,8 +131,8 @@ def build_showtime_menu_flex(show_date=None):
                 layout='vertical',
                 spacing='md',
                 contents=[
-                    TextComponent(text='๐ค Showtime Mode', weight='bold', size='xl', color='#FF5551', align='center'),
-                    TextComponent(text=f'เธชเธ–เธฒเธเธฐ: เน€เธเธดเธ”เธญเธขเธนเน\n{info_text}', size='sm', wrap=True, align='center', color='#666666', margin='md')
+                    TextComponent(text='🎤 Showtime Mode', weight='bold', size='xl', color='#FF5551', align='center'),
+                    TextComponent(text=f'สถานะ: เปิดอยู่\n{info_text}', size='sm', wrap=True, align='center', color='#666666', margin='md')
                 ]
             ),
             footer=BoxComponent(
@@ -140,11 +140,11 @@ def build_showtime_menu_flex(show_date=None):
                 spacing='sm',
                 flex=0,
                 contents=[
-                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='๐’พ เธเธฑเธเธ—เธถเธ & เธญเธญเธ', text='save')),
-                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='๐‘๏ธ เธ”เธนเธ•เธฒเธฃเธฒเธ', text='showtime')),
-                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='โ๏ธ เนเธเนเนเธเธเนเธญเธเธงเธฒเธก', text='editshowtime')),
-                    ButtonComponent(style='primary', color='#FF5551', height='md', action=MessageAction(label='๐‘ เธเธ Showtime', text='end showtime')),
-                    ButtonComponent(style='secondary', color='#888888', height='md', action=MessageAction(label=' เธญเธญเธ (Exit)', text='exit'))
+                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='💾 บันทึก & ออก', text='save')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='👁️ ดูตาราง', text='showtime')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='✏️ แก้ไขข้อความ', text='editshowtime')),
+                    ButtonComponent(style='primary', color='#FF5551', height='md', action=MessageAction(label='🛑 จบ Showtime', text='end showtime')),
+                    ButtonComponent(style='secondary', color='#888888', height='md', action=MessageAction(label='↩ ออก (Exit)', text='exit'))
                 ]
             )
         )
@@ -889,7 +889,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="โ๏ธ เนเธเนเนเธ Showtime\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))))
             return
 
-        allowed = ["save", "showtime", "editshowtime", "update showtime", "เน€เธกเธเธน", "menu", "help", "เธขเธเน€เธฅเธดเธ", "cancel", "end showtime", "exit", "เธญเธญเธ"]
+        allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "exit", "ออก"]
         if re.match(r'^end showtime\s+\d+$', text_lower): allowed.append(text_lower)
         if text_lower not in allowed and text not in allowed:
             if not re.match(time_pattern_input, text):
@@ -1008,11 +1008,11 @@ def handle_text(event):
         return
 
     # --- Normal Commands ---
-    if text in ["เน€เธกเธเธน", "menu", "help"]:
+    if text in ["เมนู", "menu", "help"]:
         line_bot_api.reply_message(reply_token, build_main_menu_flex())
         return
 
-    if text in ["เธขเธเน€เธฅเธดเธ", "cancel"]:
+    if text in ["ยกเลิก", "cancel"]:
         if state:
             clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="โ… เธขเธเน€เธฅเธดเธเน€เธฃเธตเธขเธเธฃเนเธญเธข"))
