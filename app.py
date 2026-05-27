@@ -223,6 +223,15 @@ def delete_showtime_event(event_name):
         logger.error(f"Delete showtime event error: {e}")
         return False
 
+def build_showtime_event_list_message():
+    events = list_showtime_events()
+    if not events:
+        return "ยังไม่มีตาราง Showtime ในระบบ"
+    msg = "ตาราง Showtime ที่มีอยู่:\n"
+    for i, ev in enumerate(events, 1):
+        msg += f"{i}. {ev['event_name']} ({ev['count']} วง)\n"
+    return msg
+
 def sort_showtime_by_time(schedule):
     def get_sort_key(item):
         time_str = item.get("time", "00:00").split('-')[0]
@@ -919,8 +928,35 @@ def handle_text(event):
 
     # --- Entry: Start Showtime ---
     if text_lower == "showtime":
+        events = list_showtime_events()
+        if events:
+            msg = build_showtime_event_list_message()
+            msg += "\n\nพิมพ์ 'เพิ่ม' เพื่อเพิ่มตารางใหม่\nหรือพิมพ์ 'showtime [เลข]' เพื่อดูตารางเดิม"
+            set_state(user_id, {"action": "wait_showtime_add_confirm", "events": events})
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+            return
         set_state(user_id, {"action": "wait_showtime_event_name"})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="🎪 กรุณาระบุชื่อ event\nเช่น Big Mountain 2026"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="กรุณาระบุชื่อ Showtime/Event\nเช่น Big Mountain 2026"))
+        return
+
+    if state and state.get("action") == "wait_showtime_add_confirm":
+        events = state.get("events", [])
+        if text_lower in ["เพิ่ม", "add", "yes", "y"]:
+            set_state(user_id, {"action": "wait_showtime_event_name"})
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="กรุณาระบุชื่อ Showtime/Event"))
+            return
+        m = re.match(r"^showtime\\s+(\\d+)$", text_lower)
+        if m:
+            idx = int(m.group(1))
+            if idx < 1 or idx > len(events):
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"เลขไม่ถูกต้อง (1-{len(events)})"))
+                return
+            selected = events[idx - 1]
+            msg = format_showtime_message(None, selected["event_name"])
+            msg += "\n\nพิมพ์ 'เพิ่ม' ถ้าต้องการเพิ่มตารางใหม่"
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+            return
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'เพิ่ม' หรือ 'showtime [เลข]'"))
         return
 
     if state and state.get("action") == "wait_showtime_event_name":
@@ -943,8 +979,8 @@ def handle_text(event):
                 return
         event_name = state.get("event_name")
         set_state(user_id, {"action": "showtime_mode", "event_name": event_name, "show_date": show_date, "end_date": show_date, "edit_mode": False, "target_id": group_id or user_id, "group_id": group_id, "last_alert_key": None})
-        msg = format_showtime_message(show_date, event_name) + "\n\n📸 ส่งรูป Showtime ใหม่เพื่ออัปเดต หรือพิมพ์เวลาเพื่อเพิ่มรายการ"
-        line_bot_api.reply_message(reply_token, [TextSendMessage(text=msg), build_showtime_menu_flex(show_date)])
+        msg = format_showtime_message(show_date, event_name) + "\n\nส่งรูปหรือพิมพ์ตารางแสดง แล้วพิมพ์ 'save' เพื่อบันทึก"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
     # --- Normal Commands ---
@@ -1095,7 +1131,7 @@ def handle_text(event):
     # --- BLOCK 3: Enhanced Expense Parsing ---
     # guard: ห้าม parse expense ขณะรอ input หรืออยู่ใน state อื่น
     SLIP_STATES = {"wait_slip_payer", "wait_slip_participants", "wait_expense_participants",
-                   "showtime_mode", "wait_showtime_event_name", "wait_showtime_date",
+                   "showtime_mode", "wait_showtime_add_confirm", "wait_showtime_event_name", "wait_showtime_date",
                    "wait_end_showtime_event_index", "wait_end_showtime_confirm", "end_trip",
                    "edit_selection", "edit_amount", "stop_event", "export_history"}
     trip = get_active_trip(user_id, group_id)
