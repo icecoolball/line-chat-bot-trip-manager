@@ -109,8 +109,8 @@ def build_main_menu_flex():
         )
     )
 
-def build_showtime_menu_flex(end_date=None):
-    info_text = f"สิ้นสุด: {end_date}" if end_date else "ไม่ได้กำหนดวันสิ้นสุด"
+def build_showtime_menu_flex(show_date=None):
+    info_text = f"📅 วันที่จัดแสดง: {show_date}" if show_date else "ไม่ได้กำหนดวันจัดแสดง"
     return FlexSendMessage(
         alt_text="Showtime Menu",
         contents=BubbleContainer(
@@ -193,11 +193,12 @@ def sort_showtime_by_time(schedule):
         except: return (2, 0)
     return sorted(schedule, key=get_sort_key)
 
-def format_showtime_message():
+def format_showtime_message(show_date=None):
     showtime = load_showtime()
     if not showtime.get("schedule"): return "ℹ️ ยังไม่มีข้อมูล Showtime"
     sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
-    msg = "📋 ตารางการแสดง:\n\n"
+    date_header = f"📅 วันที่จัดแสดง: {show_date}\n" if show_date else ""
+    msg = f"{date_header}📋 ตารางการแสดง:\n\n"
     for item in sorted_schedule:
         time_display = item.get('time', '-').replace('.', ':')
         artist = item.get('artist', '-')
@@ -334,6 +335,17 @@ def extract_amount(text):
             if 1 <= num <= 1000000: return num
         except: continue
     return None
+
+def _to_thai_date_str(iso_str):
+    """แปลง ISO string (UTC) → วันที่ไทย (UTC+7) format YYYY-MM-DD"""
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+        dt_thai = dt + timedelta(hours=7)
+        return dt_thai.strftime("%Y-%m-%d")
+    except:
+        return iso_str[:10]  # fallback
 
 def extract_showtime(text):
     if not text: return []
@@ -619,7 +631,7 @@ def daily_summary_cron():
 
         for trip in trips:
             expenses = get_all_expenses(trip['id'])
-            today_exp = [e for e in expenses if e.get('created_at', '').startswith(today_str)]
+            today_exp = [e for e in expenses if _to_thai_date_str(e.get('created_at', '')) == today_str]
             if not today_exp: continue
 
             total_thb = 0.0; currency_totals = {}; categories = {}
@@ -745,22 +757,18 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ บันทึก Showtime เสร็จ!\n📸 กลับมารับสลิปปกติแล้ว"))
             return
 
-        if text_lower in ["exit", "ออก"]:
-            clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมด Showtime เรียบร้อย\n📸 กลับมารับสลิปปกติแล้วครับ"))
-            return
-
-        if text_lower in ["end showtime", "stop showtime", "จบ showtime"]:
+        if text_lower in ["end showtime", "stop showtime"]:
             showtime_data = load_showtime()
             schedule = showtime_data.get("schedule", [])
             if not schedule:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีตารางแสดง\nพิมพ์ 'exit' เพื่อออกจากโหมด Showtime"))
                 return
-            msg = "️ เลือก Showtime ที่ต้องการลบ:\n\n"
-            for i, item in enumerate(schedule, 1):
-                msg += f"{i}. ️ {item.get('time','-')} | {item.get('artist','-')}\n"
-            msg += "\nพิมพ์ 'end showtime [เลข]' เช่น end showtime 1\nหรือ 'exit' เพื่อออกจากโหมดโดยไม่ลบ"
-            set_state(user_id, {"action": "showtime_mode", "pending_delete_schedule": schedule, "end_date": state.get("end_date")})
+            sorted_sched = sort_showtime_by_time(schedule)
+            msg = "🗑️ เลือก Showtime ที่ต้องการลบ:\n\n"
+            for i, item in enumerate(sorted_sched, 1):
+                msg += f"{i}. ⏱️ {item.get('time','-')} | 🎤 {item.get('artist','-')}\n"
+            msg += "\nพิมพ์ 'end showtime [เลข]' เช่น end showtime 1\nหรือ 'exit' เพื่อออกจากโหมด"
+            set_state(user_id, {**state, "action": "showtime_mode", "pending_delete_schedule": sorted_sched})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
 
@@ -778,10 +786,20 @@ def handle_text(event):
                     save_showtime(showtime_data)
                     new_state = {k: v for k, v in state.items() if k != "pending_delete_schedule"}
                     set_state(user_id, new_state)
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ ลบเรียบร้อย: {removed.get('time','-')} | {removed.get('artist','-')}\n\n" + format_showtime_message()))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ ลบเรียบร้อย: {removed.get('time','-')} | {removed.get('artist','-')}\n\n" + format_showtime_message(state.get("show_date"))))
                 else:
                     line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง"))
                 return
+
+        # --- menu/help/exit ต้อง bypass ทุก state ใน showtime_mode (รวม edit_mode) ---
+        if text in ["เมนู", "menu", "help"]:
+            line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("show_date")))
+            return
+
+        if text_lower in ["exit", "ออก"]:
+            clear_state(user_id)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมด Showtime เรียบร้อย\n📸 กลับมารับสลิปปกติแล้วครับ"))
+            return
 
         if state.get("edit_mode"):
             lines = text.splitlines()
@@ -830,41 +848,39 @@ def handle_text(event):
             return
 
         if text_lower == "showtime":
-            line_bot_api.reply_message(reply_token, [TextSendMessage(text=format_showtime_message()), build_showtime_menu_flex(state.get("end_date"))])
+            line_bot_api.reply_message(reply_token, [TextSendMessage(text=format_showtime_message(state.get("show_date"))), build_showtime_menu_flex(state.get("show_date"))])
             return
         if text_lower in ["editshowtime", "update showtime"]:
             set_state(user_id, {**state, "edit_mode": True})
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="️ แก้ไข Showtime\n" + format_showtime_message()))
-            return
-        if text in ["เมนู", "menu", "help"]:
-            line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("end_date")))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✏️ แก้ไข Showtime\n" + format_showtime_message(state.get("show_date"))))
             return
 
-        allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "stop showtime", "exit", "ออก"]
+        allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "exit", "ออก"]
         if re.match(r'^end showtime\s+\d+$', text_lower): allowed.append(text_lower)
         if text_lower not in allowed and text not in allowed:
             if not re.match(time_pattern_input, text):
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="️ ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือส่ง: 22:00-23:00 ชื่อวง"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="🔒 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือส่ง: 22:00-23:00 ชื่อวง"))
             return
 
     # --- Entry: Start Showtime ---
     if text_lower == "showtime":
         set_state(user_id, {"action": "wait_showtime_date"})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=" กรุณาระบุวันที่สิ้นสุด Showtime (YYYY-MM-DD)\nเช่น 2026-05-30\n(พิมพ์ 'ข้าม' หากไม่ต้องการกำหนด)"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="📅 กรุณาระบุวันที่จัดแสดง (YYYY-MM-DD)\nเช่น 2026-05-30\n(พิมพ์ 'ข้าม' หากไม่ต้องการกำหนด)"))
         return
 
     if state and state.get("action") == "wait_showtime_date":
-        end_date = None
+        show_date = None
         if text_lower != "ข้าม" and text_lower != "skip":
             try:
                 parsed = datetime.strptime(text.strip(), "%Y-%m-%d")
-                end_date = parsed.strftime("%Y-%m-%d")
+                show_date = parsed.strftime("%Y-%m-%d")
             except ValueError:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ รูปแบบวันที่ไม่ถูกต้อง กรุณาใช้ YYYY-MM-DD หรือพิมพ์ 'ข้าม'"))
                 return
-        set_state(user_id, {"action": "showtime_mode", "end_date": end_date, "edit_mode": False, "target_id": group_id or user_id, "group_id": group_id, "last_alert_key": None})
-        msg = format_showtime_message() + "\n\n📸 ส่งรูป Showtime ใหม่เพื่ออัปเดต หรือพิมพ์เวลาเพื่อเพิ่มรายการ"
-        line_bot_api.reply_message(reply_token, [TextSendMessage(text=msg), build_showtime_menu_flex(end_date)])
+        # show_date = วันที่จัดแสดง, end_date = วันสิ้นสุด showtime mode (ใช้วันเดียวกัน)
+        set_state(user_id, {"action": "showtime_mode", "show_date": show_date, "end_date": show_date, "edit_mode": False, "target_id": group_id or user_id, "group_id": group_id, "last_alert_key": None})
+        msg = format_showtime_message(show_date) + "\n\n📸 ส่งรูป Showtime ใหม่เพื่ออัปเดต หรือพิมพ์เวลาเพื่อเพิ่มรายการ"
+        line_bot_api.reply_message(reply_token, [TextSendMessage(text=msg), build_showtime_menu_flex(show_date)])
         return
 
     # --- Normal Commands ---
@@ -906,7 +922,7 @@ def handle_text(event):
     if text.startswith("ทริป ") or text_lower.startswith("trip "):
         trip_name = text[5:].strip() if text.startswith("ทริป ") else text[5:].strip()
         if not trip_name:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="️ กรุณาระบุชื่อทริป"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป"))
             return
         if not supabase: return
         try:
@@ -969,7 +985,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         expenses = get_all_expenses(trip['id'])
-        today_exp = [e for e in expenses if e.get('created_at', '').startswith(today_str)]
+        today_exp = [e for e in expenses if _to_thai_date_str(e.get('created_at', '')) == today_str]
         if not today_exp:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ℹ️ วันนี้ ({today_str}) ยังไม่มีรายจ่าย"))
             return
@@ -1013,8 +1029,12 @@ def handle_text(event):
         return
 
     # --- BLOCK 3: Enhanced Expense Parsing ---
+    # guard: ห้าม parse expense ขณะรอ input หรืออยู่ใน state อื่น
+    SLIP_STATES = {"wait_slip_payer", "wait_slip_participants", "wait_expense_participants",
+                   "showtime_mode", "wait_showtime_date", "end_trip",
+                   "edit_selection", "edit_amount", "stop_event", "export_history"}
     trip = get_active_trip(user_id, group_id)
-    if trip and not (state and state.get("action") == "showtime_mode"):
+    if trip and not (state and state.get("action") in SLIP_STATES):
         default_payer = get_display_name(user_id, group_id)
         payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
         if amount and amount > 0:
@@ -1101,7 +1121,7 @@ def handle_text(event):
     if text_lower == "excel":
         trip = get_active_trip(user_id, group_id)
         if not trip:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         excel_buffer, error = export_trip_to_excel(trip['id'], trip['title'])
         if error:
@@ -1122,7 +1142,7 @@ def handle_text(event):
             res = supabase.table("trips").select("*").order("created_at", desc=True).limit(10).execute()
             all_trips = res.data if res.data else []
             if not all_trips:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="️ ยังไม่มีประวัติทริป"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="📜 ยังไม่มีประวัติทริป"))
                 return
             msg = "📜 ประวัติทริป (10 ทริปล่าสุด):\n\n"
             for i, trip in enumerate(all_trips, 1):
