@@ -261,7 +261,8 @@ def format_showtime_message(show_date=None, event_name=None):
     if not show_date and showtime.get("schedule"):
         first_row = showtime["schedule"][0]
         show_date = first_row.get("show_date") or first_row.get("event_date") or first_row.get("date")
-    date_header = f"📅 วันที่จัดแสดง: {show_date}\n" if show_date else ""
+    show_date_text = show_date if show_date else "ไม่ระบุ"
+    date_header = f"📅 วันที่จัดแสดง: {show_date_text}\n"
     if not showtime.get("schedule"): return f"{date_header}ℹ️ ยังไม่มีข้อมูล Showtime"
     sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
     msg = f"{date_header}📋 ตารางการแสดง:\n\n"
