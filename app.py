@@ -893,8 +893,11 @@ def handle_text(event):
             return
 
         # --- menu/help/exit ต้อง bypass ทุก state ใน showtime_mode (รวม edit_mode) ---
-        if text in ["เมนู", "menu", "help"]:
+        if text in ["menu showtime", "showtime menu"]:
             line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("show_date")))
+            return
+        if text in ["เมนู", "menu", "help"]:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
 
         if text_lower in ["exit", "ออก"]:
@@ -969,7 +972,7 @@ def handle_text(event):
             return
 
         if text_lower == "showtime":
-            line_bot_api.reply_message(reply_token, [TextSendMessage(text=format_showtime_message(state.get("show_date"), state.get("event_name"))), build_showtime_menu_flex(state.get("show_date"))])
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=format_showtime_message(state.get("show_date"), state.get("event_name"))))
             return
         if text_lower in ["edit showtime", "update showtime", "editshowtime"]:
             set_state(user_id, {**state, "edit_mode": True})
@@ -980,7 +983,7 @@ def handle_text(event):
         if re.match(r'^end showtime\s+\d+$', text_lower): allowed.append(text_lower)
         if text_lower not in allowed and text not in allowed:
             if not re.match(time_pattern_input, text):
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="🔒 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือส่ง: 22:00-23:00 ชื่อวง"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="🔒 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือพิมพ์ 'menu showtime' เพื่อเปิดเมนู"))
             return
 
     if state and state.get("action") == "wait_end_showtime_event_index":
@@ -1035,8 +1038,11 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_add_confirm":
-        if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
+        if text in ["menu showtime", "showtime menu"]:
             line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
+            return
+        if text in ["เมนู", "menu", "help"]:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1085,8 +1091,11 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_event_name":
-        if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
+        if text in ["menu showtime", "showtime menu"]:
             line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
+            return
+        if text in ["เมนู", "menu", "help"]:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1101,8 +1110,11 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_date":
-        if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
+        if text in ["menu showtime", "showtime menu"]:
             line_bot_api.reply_message(reply_token, build_showtime_menu_flex())
+            return
+        if text in ["เมนู", "menu", "help"]:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1528,7 +1540,7 @@ def handle_image(event):
     if state and state.get("action") in showtime_actions:
         line_bot_api.reply_message(
             reply_token,
-            TextSendMessage(text="📌 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง Showtime"),
+            TextSendMessage(text="📌 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือพิมพ์ 'menu showtime' เพื่อเปิดเมนู"),
         )
         return
 
