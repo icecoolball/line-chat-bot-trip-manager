@@ -26,7 +26,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- การตั้งค่าเริ่มต้น ---
+# --- Configuration ---
 line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
 handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
 
@@ -59,8 +59,7 @@ def set_state(user_id, data):
 
 def get_state(user_id):
     s = user_state.get(user_id)
-    if not s:
-        return None
+    if not s: return None
     if s.get("action") == "showtime_mode":
         end_date_str = s.get("end_date")
         if end_date_str:
@@ -69,8 +68,7 @@ def get_state(user_id):
                 if datetime.now() > end_dt + timedelta(days=1):
                     clear_state(user_id)
                     return None
-            except:
-                pass
+            except: pass
         return s
     if datetime.now().timestamp() - s.get("_ts", 0) > STATE_TIMEOUT_SECONDS:
         clear_state(user_id)
@@ -130,10 +128,11 @@ def build_showtime_menu_flex(end_date=None):
                 spacing='sm',
                 flex=0,
                 contents=[
-                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='💾 บันทึก & ออก', text='save')),
+                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label=' บันทึก & ออก', text='save')),
                     ButtonComponent(style='secondary', height='md', action=MessageAction(label='👁️ ดูตาราง', text='showtime')),
                     ButtonComponent(style='secondary', height='md', action=MessageAction(label='✏️ แก้ไขข้อความ', text='editshowtime')),
-                    ButtonComponent(style='danger', height='md', action=MessageAction(label='🛑 จบ Showtime', text='end showtime'))
+                    ButtonComponent(style='primary', color='#FF5551', height='md', action=MessageAction(label='🛑 จบ Showtime', text='end showtime')),
+                    ButtonComponent(style='secondary', color='#888888', height='md', action=MessageAction(label=' ออก (Exit)', text='exit'))
                 ]
             )
         )
@@ -161,20 +160,19 @@ def build_report_flex(title, subtitle, lines, alt_text="รายงาน"):
 # Showtime Management
 # =================================================================
 def load_showtime():
-    if not supabase:
-        return {"schedule": [], "last_updated": None}
+    if not supabase: return { "schedule ": [],  "last_updated ": None}
     try:
         res = supabase.table("showtimes").select("*").execute()
         schedule = res.data if res.data else []
-        return {"schedule": schedule, "last_updated": datetime.now().isoformat()}
+        return { "schedule ": schedule,  "last_updated ": datetime.now().isoformat()}
     except Exception as e:
         logger.error(f"Load showtime error: {e}")
-        return {"schedule": [], "last_updated": None}
+        return { "schedule ": [],  "last_updated ": None}
 
 def save_showtime(showtime_data):
-    if not supabase:
-        return False
+    if not supabase: return False
     try:
+        # ลบข้อมูลเก่าทั้งหมด
         supabase.table("showtimes").delete().neq("id", 0).execute()
         schedule = showtime_data.get("schedule", [])
         for item in schedule:
@@ -193,20 +191,18 @@ def sort_showtime_by_time(schedule):
         try:
             h, m = map(int, time_str.split(':'))
             return (1, h * 60 + m) if 0 <= h < 9 else (0, h * 60 + m)
-        except:
-            return (2, 0)
+        except: return (2, 0)
     return sorted(schedule, key=get_sort_key)
 
 def format_showtime_message():
     showtime = load_showtime()
-    if not showtime.get("schedule"):
-        return "ℹ️ ยังไม่มีข้อมูล Showtime"
+    if not showtime.get("schedule"): return "ℹ️ ยังไม่มีข้อมูล Showtime"
     sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
     msg = "📋 ตารางการแสดง:\n\n"
     for item in sorted_schedule:
         time_display = item.get('time', '-').replace('.', ':')
         artist = item.get('artist', '-')
-        msg += f"⏱️ {time_display} | 🎤 {artist}\n"
+        msg += f"️ {time_display} | 🎤 {artist}\n"
     return msg
 
 # =================================================================
@@ -216,9 +212,18 @@ CURRENCY_RATES = {"THB": 1, "JPY": 0.23, "USD": 34.5, "KRW": 0.025}
 _RATE_CACHE = {}
 _RATE_CACHE_TTL_SECONDS = 1800
 
+def _to_thai_date_str(iso_str):
+    """แก้ไข Bug 1: แปลง ISO string (UTC) → วันที่ไทย (UTC+7) format YYYY-MM-DD"""
+    if not iso_str: return ""
+    try:
+        dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+        dt_thai = dt + timedelta(hours=7)
+        return dt_thai.strftime("%Y-%m-%d")
+    except:
+        return iso_str[:10] # fallback
+
 def get_exchange_rate(from_curr, to_curr):
-    if from_curr == to_curr:
-        return 1.0
+    if from_curr == to_curr: return 1.0
     from_curr = (from_curr or "").upper()
     to_curr = (to_curr or "").upper()
     key = (from_curr, to_curr)
@@ -237,8 +242,7 @@ def get_exchange_rate(from_curr, to_curr):
         _RATE_CACHE[key] = {"rate": float(fallback), "ts": now_ts}
         return float(fallback)
     except:
-        if cached and cached.get("rate"):
-            return cached["rate"]
+        if cached and cached.get("rate"): return cached["rate"]
         return CURRENCY_RATES.get(to_curr, 1.0)
 
 _CURRENCY_ALIASES = {
@@ -250,45 +254,37 @@ _CURRENCY_ALIASES = {
 }
 
 def _normalize_currency(token):
-    if not token:
-        return None
+    if not token: return None
     t = token.strip()
-    if not t:
-        return None
+    if not t: return None
     return _CURRENCY_ALIASES.get(t.upper(), _CURRENCY_ALIASES.get(t.lower(), t.upper() if re.fullmatch(r"[A-Za-z]{3}", t) else None))
 
 def _parse_amount_token(token):
-    if not token:
-        return None
+    if not token: return None
     t = token.strip().replace(",", "")
-    if not re.fullmatch(r"\d+(?:\.\d{0,2})?", t):
-        return None
+    if not re.fullmatch(r"\d+(?:\.\d{0,2})?", t): return None
     try:
         v = float(t)
         return v if v > 0 else None
-    except:
-        return None
+    except: return None
 
 def parse_enhanced_expense(text, default_payer_name=None):
     """ปรับปรุงให้รองรับการไม่ใส่ Tag และ Participants (ให้บอทถามต่อได้)"""
     raw = (text or "").strip()
-    if not raw:
-        return None, None, None, None, None, None
+    if not raw: return None, None, None, None, None, None
     parts = [p for p in raw.split() if p.strip()]
     # ลดจำนวนขั้นต่ำเหลือ 2 (เพื่อให้รองรับรูปแบบ "Ball 500" ได้)
-    if len(parts) < 2:
-        return None, None, None, None, None, None
+    if len(parts) < 2: return None, None, None, None, None, None
 
     amt_idx = None
     amt_val = None
     for i, p in enumerate(parts):
-        # แก้ regex ให้ถูกต้อง (เติม \ ก่อนจุดทศนิยม)
+        # แก้ regex ให้ถูกต้อง
         if re.fullmatch(r"\d+(?:\.\d{0,2})?", p.replace(",", "")):
             amt_idx, amt_val = i, float(p.replace(",", ""))
             break
         
-    if amt_idx is None:
-        return None, None, None, None, None, None
+    if amt_idx is None: return None, None, None, None, None, None
 
     currency = "THB"
     after_amt_idx = amt_idx + 1
@@ -298,7 +294,7 @@ def parse_enhanced_expense(text, default_payer_name=None):
             currency = maybe_curr
             after_amt_idx += 1
 
-    # อนุญาตให้ไม่มี Tag ได้ (ไม่ return None ทิ้ง)
+    # อนุญาตให้ไม่มี Tag ได้
     tag = None
     if after_amt_idx < len(parts) and parts[after_amt_idx].startswith("#"):
         tag = parts[after_amt_idx].strip()
@@ -322,16 +318,13 @@ def parse_enhanced_expense(text, default_payer_name=None):
         payer = (default_payer_name or "").strip() or None
         item = None
 
-    if not payer:
-        return None, None, None, None, None, None
-    if not item:
-        item = "ค่าใช้จ่าย"
+    if not payer: return None, None, None, None, None, None
+    if not item: item = "ค่าใช้จ่าย"
 
     return payer, item, amt_val, currency, tag, participants
 
 def extract_amount(text):
-    if not text:
-        return None
+    if not text: return None
     lines = text.split('\n')
     amount_labels = ['จำนวน', 'amount']
     for i, line in enumerate(lines):
@@ -341,66 +334,50 @@ def extract_amount(text):
             for a in amounts:
                 try:
                     num = float(a.replace(',', ''))
-                    if 1 <= num <= 1000000:
-                        return num
-                except:
-                    continue
+                    if 1 <= num <= 1000000: return num
+                except: continue
         if i + 1 < len(lines):
             next_line = lines[i + 1].strip()
             amounts = re.findall(r'(\d{1,3}(?:,\d{3})(?:\.\d{1,2})?)', next_line)
             for a in amounts:
                 try:
                     num = float(a.replace(',', ''))
-                    if 1 <= num <= 1000000:
-                        return num
-                except:
-                    continue
+                    if 1 <= num <= 1000000: return num
+                except: continue
     baht_matches = re.findall(r'(\d{1,3}(?:,\d{3})(?:\.\d{1,2})?)\sบาท', text)
     for a in baht_matches:
         try:
             num = float(a.replace(',', ''))
-            if 1 <= num <= 1000000:
-                return num
-        except:
-            continue
+            if 1 <= num <= 1000000: return num
+        except: continue
     return None
 
 def extract_showtime(text):
-    if not text:
-        return []
+    if not text: return []
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     showtime_list = []
     time_pattern = r'(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})'
     for i, line in enumerate(lines):
         time_match = re.search(time_pattern, line)
-        if not time_match:
-            continue
+        if not time_match: continue
         time_str = f"{time_match.group(1)}-{time_match.group(2)}".replace('.', ':')
         artist = None
         line_without_time = re.sub(time_pattern, '', line).strip()
-        line_without_time = re.sub(r'^[⏱️🎤📋✏️🎵]+\s*', '', line_without_time).strip()
-        if line_without_time and len(line_without_time) > 1:
-            artist = line_without_time
+        line_without_time = re.sub(r'^[⏱️🎤📋✏️]+\s*', '', line_without_time).strip()
+        if line_without_time and len(line_without_time) > 1: artist = line_without_time
         if not artist:
             for j in range(i - 1, max(i - 3, -1), -1):
                 prev_line = lines[j].strip()
-                if re.search(time_pattern, prev_line) or re.match(r'^[\d\s-:.–]+$', prev_line):
-                    continue
-                prev_clean = re.sub(r'^[⏱️🎤📋✏️🎵]+\s*', '', prev_line).strip()
-                if prev_clean and len(prev_clean) > 1:
-                    artist = prev_clean
-                    break
+                if re.search(time_pattern, prev_line) or re.match(r'^[\d\s-:.–]+$', prev_line): continue
+                prev_clean = re.sub(r'^[⏱️🎤📋️🎵]+\s*', '', prev_line).strip()
+                if prev_clean and len(prev_clean) > 1: artist = prev_clean; break
         if not artist:
             for j in range(i + 1, min(i + 3, len(lines))):
                 next_line = lines[j].strip()
-                if re.search(time_pattern, next_line) or re.match(r'^[\d\s-:.–]+$', next_line):
-                    continue
-                next_clean = re.sub(r'^[⏱️🎤📋✏️🎵]+\s*', '', next_line).strip()
-                if next_clean and len(next_clean) > 1:
-                    artist = next_clean
-                    break
-        if not artist:
-            artist = "Unknown"
+                if re.search(time_pattern, next_line) or re.match(r'^[\d\s-:.–]+$', next_line): continue
+                next_clean = re.sub(r'^[⏱️🎤📋️🎵]+\s*', '', next_line).strip()
+                if next_clean and len(next_clean) > 1: artist = next_clean; break
+        if not artist: artist = "Unknown"
         showtime_list.append({"time": time_str, "artist": artist})
     return showtime_list
 
@@ -408,13 +385,11 @@ def extract_showtime(text):
 # Core DB Functions
 # =================================================================
 def get_active_trip(user_id, group_id=None):
-    if not supabase:
-        return None
+    if not supabase: return None
     try:
         if group_id:
             res = supabase.table("trips").select("*").eq("status", "active").eq("line_group_id", group_id).order("created_at", desc=True).limit(1).execute()
-            if res.data:
-                return res.data[0]
+            if res.data: return res.data[0]
         res = supabase.table("trips").select("*").eq("status", "active").eq("creator_id", user_id).order("created_at", desc=True).limit(1).execute()
         return res.data[0] if res.data else None
     except Exception as e:
@@ -423,31 +398,24 @@ def get_active_trip(user_id, group_id=None):
 
 def get_display_name(user_id, group_id=None):
     try:
-        if group_id:
-            profile = line_bot_api.get_group_member_profile(group_id, user_id)
-        else:
-            profile = line_bot_api.get_profile(user_id)
+        if group_id: profile = line_bot_api.get_group_member_profile(group_id, user_id)
+        else: profile = line_bot_api.get_profile(user_id)
         return profile.display_name
-    except:
-        return user_id[:8]
+    except: return user_id[:8]
 
 def get_all_expenses(trip_id):
-    if not supabase:
-        return []
+    if not supabase: return []
     try:
         res = supabase.table("expenses").select("*").eq("trip_id", trip_id).order("id", desc=False).execute()
         return res.data if res.data else []
-    except:
-        return []
+    except: return []
 
 def update_expense_amount(expense_id, new_amount):
-    if not supabase:
-        return False
+    if not supabase: return False
     try:
         supabase.table("expenses").update({"amount": new_amount}).eq("id", expense_id).execute()
         return True
-    except:
-        return False
+    except: return False
 
 def compute_trip_balances_thb(trip_id, group_id=None):
     expenses = get_all_expenses(trip_id)
@@ -458,36 +426,29 @@ def compute_trip_balances_thb(trip_id, group_id=None):
     for exp in expenses:
         curr = exp.get("currency", "THB")
         amt_thb = float(exp.get("amount") or 0)
-        if curr != "THB":
-            amt_thb *= (get_exchange_rate(curr, "THB") or 1.0)
-        if amt_thb <= 0:
-            continue
+        if curr != "THB": amt_thb *= (get_exchange_rate(curr, "THB") or 1.0)
+        if amt_thb <= 0: continue
         total_thb += amt_thb
         payer = exp.get("payer_name") or get_display_name(exp.get("line_user_id"), group_id)
         if payer:
             paid_totals[payer] = paid_totals.get(payer, 0.0) + amt_thb
             people.add(payer)
         ppl = exp.get("participants") or []
-        if isinstance(ppl, str):
-            ppl = [p.strip() for p in ppl.split() if p.strip()]
-        if not ppl:
-            ppl = [payer] if payer else []
+        if isinstance(ppl, str): ppl = [p.strip() for p in ppl.split() if p.strip()]
+        if not ppl: ppl = [payer] if payer else []
         share = amt_thb / max(len(ppl), 1) if ppl else 0.0
         for p in ppl:
-            if not p:
-                continue
+            if not p: continue
             share_totals[p] = share_totals.get(p, 0.0) + share
             people.add(p)
     return total_thb, paid_totals, share_totals, people
 
 def load_schedules():
-    if not supabase:
-        return []
+    if not supabase: return []
     try:
         res = supabase.table("schedules").select("*").order("created_at", desc=True).execute()
         return res.data if res.data else []
-    except:
-        return []
+    except: return []
 
 def get_active_events():
     schedules = load_schedules()
@@ -499,8 +460,7 @@ def get_active_events():
 def export_trip_to_excel(trip_id, trip_title):
     try:
         expenses = get_all_expenses(trip_id)
-        if not expenses:
-            return None, "ไม่มีข้อมูลค่าใช้จ่ายในทริปนี้"
+        if not expenses: return None, "ไม่มีข้อมูลค่าใช้จ่ายในทริปนี้"
         data = []
         for exp in expenses:
             user_name = exp.get('payer_name') or get_display_name(exp['line_user_id'], None)
@@ -511,11 +471,9 @@ def export_trip_to_excel(trip_id, trip_title):
                     dt = datetime.fromisoformat(created.replace('Z', '+00:00')) + timedelta(hours=7)
                     date_str = dt.strftime('%Y-%m-%d')
                     time_str = dt.strftime('%H:%M:%S')
-                except:
-                    date_str, time_str = created[:10], created[11:19]
+                except: date_str, time_str = created[:10], created[11:19]
             ppl = exp.get('participants') or []
-            if isinstance(ppl, str):
-                ppl = [p.strip() for p in ppl.split() if p.strip()]
+            if isinstance(ppl, str): ppl = [p.strip() for p in ppl.split() if p.strip()]
             data.append({
                 "ชื่อทริป": trip_title, "วันที่": date_str, "เวลา": time_str,
                 "ชื่อผู้จ่าย": user_name, "รายการ": exp.get('item_name', ''),
@@ -524,25 +482,20 @@ def export_trip_to_excel(trip_id, trip_title):
             })
         df = pd.DataFrame(data)
         output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Expenses')
+        with pd.ExcelWriter(output, engine='openpyxl') as writer: df.to_excel(writer, index=False, sheet_name='Expenses')
         output.seek(0)
         return output, None
-    except Exception as e:
-        return None, str(e)
+    except Exception as e: return None, str(e)
 
 def upload_excel_to_supabase(file_buffer, filename):
-    if not supabase:
-        return None, "Supabase client not initialized"
+    if not supabase: return None, "Supabase client not initialized"
     try:
         supabase.storage.from_("trip-exports").upload(
-            path=filename,
-            file=file_buffer.getvalue(),
+            path=filename, file=file_buffer.getvalue(),
             file_options={"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "upsert": "true"}
         )
         return supabase.storage.from_("trip-exports").get_public_url(filename), None
-    except Exception as e:
-        return None, str(e)
+    except Exception as e: return None, str(e)
 
 # =================================================================
 # API Endpoints
@@ -550,8 +503,7 @@ def upload_excel_to_supabase(file_buffer, filename):
 @app.route("/api/event-time", methods=["GET"])
 def get_event_time():
     url = request.args.get("url", "")
-    if not url:
-        return jsonify({"ok": False, "error": "ไม่มี URL"}), 400
+    if not url: return jsonify({"ok": False, "error": "ไม่มี URL"}), 400
     try:
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         patterns = [
@@ -561,37 +513,27 @@ def get_event_time():
         matched = ""
         for p in patterns:
             m = re.search(p, resp.text, re.IGNORECASE)
-            if m:
-                matched = m.group(0)
-                break
+            if m: matched = m.group(0); break
         return jsonify({"ok": True, "matchedText": matched})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/line-push", methods=["POST"])
 def line_push():
     data = request.json
     target_id, message = data.get("targetId"), data.get("message")
-    if not target_id or not message:
-        return jsonify({"ok": False, "error": "ต้องระบุ targetId และ message"}), 400
+    if not target_id or not message: return jsonify({"ok": False, "error": "ต้องระบุ targetId และ message"}), 400
     try:
         line_bot_api.push_message(target_id, TextSendMessage(text=message))
         return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/config-status", methods=["GET"])
 def config_status():
-    return jsonify({
-        "ok": True,
-        "lineTokenConfigured": bool(os.getenv('LINE_CHANNEL_ACCESS_TOKEN')),
-        "lineSecretConfigured": bool(os.getenv('LINE_CHANNEL_SECRET'))
-    })
+    return jsonify({"ok": True, "lineTokenConfigured": bool(os.getenv('LINE_CHANNEL_ACCESS_TOKEN')), "lineSecretConfigured": bool(os.getenv('LINE_CHANNEL_SECRET'))})
 
 @app.route("/api/schedules", methods=["GET", "POST"])
 def handle_schedules():
-    if not supabase:
-        return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
+    if not supabase: return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
     if request.method == "GET":
         schedules = load_schedules()
         formatted = [{
@@ -618,18 +560,15 @@ def handle_schedules():
                     }
                 })
             return jsonify({"ok": False, "error": "Failed to add schedule"}), 500
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+        except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/schedules/<schedule_id>", methods=["DELETE"])
 def delete_schedule(schedule_id):
-    if not supabase:
-        return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
+    if not supabase: return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
     try:
         supabase.table("schedules").delete().eq("id", schedule_id).execute()
         return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/server-time", methods=["GET"])
 def get_server_time():
@@ -638,105 +577,74 @@ def get_server_time():
 
 @app.route("/api/check-showtime", methods=["POST"])
 def check_showtime_cron():
-    """Cron job ตรวจสอบและแจ้งเตือน Showtime - แก้ไข Logic เวลาและ Auto-End"""
     auth = request.headers.get("Authorization", "")
     secret = os.getenv("CRON_SECRET", "")
-    if secret and auth != f"Bearer {secret}":
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
-
-    # ใช้เวลาไทย (UTC+7)
+    if secret and auth != f"Bearer {secret}": return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    
     now = datetime.now() + timedelta(hours=7)
-    ended = 0
-    alerted = 0
-
+    ended = 0; alerted = 0
     showtime = load_showtime()
     schedule = showtime.get("schedule", []) or []
 
     def _start_hhmm(t):
-        """แยกเวลาเริ่มต้นจาก time range และจัดรูปแบบเป็น HH:MM"""
-        if not t:
-            return None
+        if not t: return None
         s = str(t).split("-")[0].strip().replace(".", ":").strip()
         if re.fullmatch(r"\d{1,2}:\d{2}", s):
             h, m = s.split(":")
             return f"{int(h):02d}:{int(m):02d}"
         return None
 
-    # วนลูปตรวจสอบ state ของผู้ใช้
     for uid, st in list(user_state.items()):
-        if st.get("action") != "showtime_mode":
-            continue
-
-        # 1. ตรวจสอบ Auto-End เมื่อเลยวันที่กำหนด
+        if st.get("action") != "showtime_mode": continue
         end_date = st.get("end_date")
         if end_date:
             try:
                 end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-                # เปรียบเทียบเฉพาะวันที่ ไม่ต้องสนเวลา (จบทันทีเมื่อข้ามวัน)
                 if now.date() > end_dt.date():
                     target = st.get("target_id") or uid
                     clear_state(uid)
-                    try:
-                        line_bot_api.push_message(target, TextSendMessage(text="🛑 Auto-End: Showtime หมดวันที่ตั้งไว้แล้ว"))
-                    except Exception as e:
-                        logger.error(f"Auto-end push error: {e}")
-                    ended += 1
-                    continue
-            except Exception:
-                pass
-
-        # 2. ตรวจสอบเวลาแจ้งเตือน
+                    try: line_bot_api.push_message(target, TextSendMessage(text="🛑 Auto-End: Showtime หมดวันที่ตั้งไว้แล้ว"))
+                    except Exception as e: logger.error(f"Auto-end push error: {e}")
+                    ended += 1; continue
+            except: pass
         current_hhmm = now.strftime("%H:%M")
-
         for item in schedule:
             start = _start_hhmm(item.get("time"))
-            if not start or start != current_hhmm:
-                continue
-
-            # ป้องกันการแจ้งเตือนซ้ำในนาทีเดิม
+            if not start or start != current_hhmm: continue
             key = f"{now.strftime('%Y-%m-%d')}|{start}|{item.get('artist','')}"
-            if st.get("last_alert_key") == key:
-                continue
-
+            if st.get("last_alert_key") == key: continue
             target = st.get("target_id") or uid
             try:
                 artist = item.get("artist", "-")
                 time_range = item.get("time", start)
                 line_bot_api.push_message(target, TextSendMessage(text=f"🎤 Showtime Now: {artist}\n⏱️ {time_range}"))
-                st["last_alert_key"] = key
-                alerted += 1
-            except Exception as e:
-                logger.error(f"Showtime alert push error: {e}")
+                st["last_alert_key"] = key; alerted += 1
+            except Exception as e: logger.error(f"Showtime alert push error: {e}")
             break
-
     return jsonify({"ok": True, "ended": ended, "alerted": alerted, "serverTime": now.isoformat()})
 
 @app.route("/api/daily-summary", methods=["POST"])
 def daily_summary_cron():
-    """Cron Job สำหรับสรุปยอดรายวัน Multi-Currency"""
-    if not supabase:
-        return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
-
+    if not supabase: return jsonify({"ok": False, "error": "Supabase not initialized"}), 500
     auth = request.headers.get("Authorization", "")
     secret = os.getenv("CRON_SECRET", "")
-    if secret and auth != f"Bearer {secret}":
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    if secret and auth != f"Bearer {secret}": return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     try:
-        today_str = (datetime.now() + timedelta(hours=7)).strftime("%Y-%m-%d")
+        # ใช้ _to_thai_date_str เพื่อแก้ Bug 1 ใน Cron Job ด้วย
+        today_str = _to_thai_date_str((datetime.now() + timedelta(hours=7)).isoformat())
+        
         trips_res = supabase.table("trips").select("*").eq("status", "active").execute()
         trips = trips_res.data if trips_res.data else []
         sent_count = 0
 
         for trip in trips:
             expenses = get_all_expenses(trip['id'])
-            today_exp = [e for e in expenses if e.get('created_at', '').startswith(today_str)]
-            if not today_exp:
-                continue
+            # แก้ไข filter วันที่: ใช้ _to_thai_date_str แทนการ compare string ตรงๆ
+            today_exp = [e for e in expenses if _to_thai_date_str(e.get('created_at', '')) == today_str]
+            if not today_exp: continue
 
-            total_thb = 0.0
-            currency_totals = {}
-            categories = {}
+            total_thb = 0.0; currency_totals = {}; categories = {}
 
             for exp in today_exp:
                 curr = exp.get('currency', 'THB')
@@ -749,19 +657,16 @@ def daily_summary_cron():
                 total_thb += amt_thb
 
                 tag = exp.get('tag') or '#ทั่วไป'
-                if tag not in categories:
-                    categories[tag] = {'total_thb': 0.0, 'participants': set()}
+                if tag not in categories: categories[tag] = {'total_thb': 0.0, 'participants': set()}
                 categories[tag]['total_thb'] += amt_thb
 
                 ppl = exp.get('participants') or []
-                if isinstance(ppl, str):
-                    ppl = [p.strip() for p in ppl.split() if p.strip()]
+                if isinstance(ppl, str): ppl = [p.strip() for p in ppl.split() if p.strip()]
                 if not ppl:
                     payer = exp.get('payer_name') or get_display_name(exp['line_user_id'], trip.get('line_group_id'))
                     ppl = [payer]
                 for p in ppl:
-                    if p:
-                        categories[tag]['participants'].add(str(p))
+                    if p: categories[tag]['participants'].add(str(p))
 
             msg = f"📊 สรุปยอดประจำวัน ({today_str})\n🚀 ทริป: {trip['title']}\n\n"
             if currency_totals:
@@ -777,15 +682,6 @@ def daily_summary_cron():
                 line_bot_api.push_message(target, TextSendMessage(text=msg))
                 sent_count += 1
 
-            details = {tag: {"total_thb": d['total_thb'], "participants": list(d['participants'])} for tag, d in categories.items()}
-            try:
-                supabase.table("daily_summaries").upsert({
-                    "trip_id": trip['id'], "summary_date": today_str,
-                    "total_thb": total_thb, "details": details
-                }, on_conflict="trip_id,summary_date").execute()
-            except Exception as db_err:
-                logger.warning(f"Failed to save daily summary to DB: {db_err}")
-
         return jsonify({"ok": True, "sent": sent_count, "date": today_str})
     except Exception as e:
         logger.error(f"Daily summary cron error: {e}")
@@ -798,10 +694,8 @@ def daily_summary_cron():
 def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
+    try: handler.handle(body, signature)
+    except InvalidSignatureError: abort(400)
     return 'OK'
 
 @handler.add(MessageEvent, message=TextMessage)
@@ -813,17 +707,21 @@ def handle_text(event):
     reply_token = event.reply_token
     state = get_state(user_id)
 
+    # --- Bug 2 Fix: เมนูต้องอยู่ก่อน Guard ทุกอย่าง ---
+    if text in ["เมนู", "menu", "help"]:
+        if state and state.get("action") == "showtime_mode":
+            line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("end_date")))
+        else:
+            line_bot_api.reply_message(reply_token, build_main_menu_flex())
+        return
+
     # --- BLOCK 1: Handle Follow-up states for Slip Payer & Participants ---
     if state and state.get("action") == "wait_slip_payer":
         payer_name = text
-        if payer_name in ["ฉัน", "ฉันเอง", "me"]:
-            payer_name = get_display_name(user_id, state.get('group_id'))
+        if payer_name in ["ฉัน", "ฉันเอง", "me"]: payer_name = get_display_name(user_id, state.get('group_id'))
         set_state(user_id, {
-            "action": "wait_slip_participants",
-            "message_id": state["message_id"],
-            "trip_id": state["trip_id"],
-            "group_id": state.get("group_id"),
-            "payer_name": payer_name,
+            "action": "wait_slip_participants", "message_id": state["message_id"],
+            "trip_id": state["trip_id"], "group_id": state.get("group_id"), "payer_name": payer_name,
         })
         line_bot_api.reply_message(reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
         return
@@ -837,13 +735,89 @@ def handle_text(event):
         names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
         payer_name = state.get("payer_name")
         threading.Thread(target=process_slip_with_payer, args=(
-            state["message_id"], state["trip_id"], user_id,
-            state.get("group_id"), reply_token, payer_name, names
+            state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, names
         )).start()
         clear_state(user_id)
         return
 
-    # เพิ่มบล็อกใหม่สำหรับข้อความปกติ (ไม่ใช่สลิป)
+    # --- Bug 3 Fix: SLIP_STATES Guard ---
+    SLIP_STATES = {"wait_slip_payer", "wait_slip_participants", "wait_expense_participants",
+                   "showtime_mode", "wait_showtime_date", "end_trip",
+                   "edit_selection", "edit_amount", "stop_event", "export_history"}
+
+    # ป้องกัน BLOCK 3 รันซ้ำ ถ้า state ยังต้องรอ Input
+    if state and state.get("action") in SLIP_STATES:
+        # แต่ต้องยอมให้ run เฉพาะ state ที่ต้องการประมวลผลต่อ (เช่น pending_delete_schedule)
+        if not (state.get("action") == "showtime_mode" and state.get("pending_delete_schedule")):
+             # ไม่ต้อง return ที่นี่ ให้ไหลไปเช็ค command อื่นๆ ก่อน (เช่น exit/end showtime)
+             pass 
+
+    # --- Feature 4.1: Exit command ---
+    if text_lower in ["exit", "ออก"]:
+        if state and state.get("action") == "showtime_mode":
+            clear_state(user_id)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมด Showtime เรียบร้อย\n📸 กลับมารับสลิปปกติแล้วครับ"))
+        else:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่ได้อยู่ในโหมด Showtime ครับ"))
+        return
+
+    # --- Feature 4: End showtime (Delete Selection) ---
+    if text_lower in ["end showtime", "stop showtime", "จบ showtime"]:
+        showtime_data = load_showtime()
+        schedule = showtime_data.get("schedule", [])
+        if not schedule:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีตารางแสดง\nพิมพ์ 'exit' เพื่อออกจากโหมด Showtime"))
+            return
+        
+        msg = "️ เลือก Showtime ที่ต้องการลบ:\n\n"
+        for i, item in enumerate(schedule, 1):
+            msg += f"{i}. ️ {item.get('time','-')} |  {item.get('artist','-')}\n"
+            msg += "-----------------------------------------\n"
+        msg += "\nพิมพ์ 'end showtime [เลข]' เช่น end showtime 1\nหรือ 'exit' เพื่อออกจากโหมดโดยไม่ลบ"
+        
+        # เก็บ state ไว้รอรับการลบ
+        set_state(user_id, {
+            "action": "showtime_mode", 
+            "pending_delete_schedule": schedule,
+            "end_date": state.get("end_date") if state else None
+        })
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+        return
+
+    # --- Handler for deleting specific item ---
+    if state and state.get("action") == "showtime_mode" and state.get("pending_delete_schedule"):
+        m = re.match(r'^end showtime\s+(\d+)$', text_lower)
+        if m:
+            idx = int(m.group(1)) - 1
+            original_schedule = state["pending_delete_schedule"]
+            if 0 <= idx < len(original_schedule):
+                removed = original_schedule[idx]
+                # โหลดใหม่เพื่อป้องกัน race condition
+                showtime_data = load_showtime()
+                current_sched = showtime_data.get("schedule", [])
+                
+                # ลบเฉพาะรายการที่เลือก (เทียบด้วย time และ artist)
+                new_schedule = [
+                    s for s in current_sched
+                    if not (s.get("time") == removed.get("time") and s.get("artist") == removed.get("artist"))
+                ]
+                showtime_data["schedule"] = new_schedule
+                save_showtime(showtime_data)
+                
+                # เคลียร์ pending แต่ยังอยู่ใน showtime_mode
+                new_state = {k: v for k, v in state.items() if k != "pending_delete_schedule"}
+                set_state(user_id, new_state)
+                
+                line_bot_api.reply_message(reply_token, TextSendMessage(
+                    text=f"✅ ลบเรียบร้อย: {removed.get('time','-')} | {removed.get('artist','-')}\n\n"
+                         + format_showtime_message()
+                         + "\n\nพิมพ์ 'exit' เพื่อออก หรือ 'end showtime' เพื่อลบเพิ่ม"
+                ))
+            else:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง"))
+            return
+
+    # --- Wait Expense Participants (Expense text flow) ---
     if state and state.get("action") == "wait_expense_participants":
         names = [n.strip() for n in text.split() if n.strip()]
         if not names:
@@ -851,8 +825,7 @@ def handle_text(event):
             return
         my_name = get_display_name(user_id, state.get("group_id"))
         names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
-        if not supabase:
-            return
+        if not supabase: return
         try:
             supabase.table("expenses").insert({
                 "trip_id": state["trip_id"], "line_user_id": user_id,
@@ -895,14 +868,6 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, [TextSendMessage(text=msg), build_showtime_menu_flex(end_date)])
         return
 
-    if text_lower in ["end showtime", "stop showtime", "จบ showtime"]:
-        if state and state.get("action") == "showtime_mode":
-            clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมด Showtime เรียบร้อย\n📸 กลับมารับสลิปปกติแล้วครับ"))
-        else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่ได้อยู่ในโหมด Showtime ครับ"))
-        return
-
     if text_lower == "save":
         if state and state.get("action") == "showtime_mode":
             if state.get("showtime_temp"):
@@ -913,7 +878,7 @@ def handle_text(event):
             clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ บันทึก Showtime เสร็จ!\n\n📸 ตอนนี้สลิปทำงานปกติแล้ว"))
         else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่ได้อยู่ในโหมด Showtime"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="️ ไม่ได้อยู่ในโหมด Showtime"))
         return
 
     if text_lower in ["editshowtime"]:
@@ -935,20 +900,15 @@ def handle_text(event):
         time_pattern_input = r'^(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+)$'
         for line in lines:
             line = line.strip()
-            if not line:
-                continue
+            if not line: continue
             match = re.match(time_pattern_input, line)
             if match:
                 time_input = f"{match.group(1)}-{match.group(2)}".replace('.', ':')
                 artist_input = match.group(3).strip()
                 found = False
                 for item in schedule:
-                    if item["time"] == time_input:
-                        item["artist"] = artist_input
-                        found = True
-                        break
-                if not found:
-                    schedule.append({"time": time_input, "artist": artist_input})
+                    if item["time"] == time_input: item["artist"] = artist_input; found = True; break
+                if not found: schedule.append({"time": time_input, "artist": artist_input})
                 updated = True
         if updated:
             existing["schedule"] = sort_showtime_by_time(schedule)
@@ -956,20 +916,17 @@ def handle_text(event):
             save_showtime(existing)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message() + "\n\n📝 พิมพ์เพิ่มเติม หรือ 'save' เพื่อสิ้นสุด"))
         else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบรูปแบบที่ถูกต้อง\n👉 ตัวอย่าง: 13:00-13:50 ROMANCE"))
-        return
-
-    if text in ["เมนู", "menu", "help"]:
-        if state and state.get("action") == "showtime_mode":
-            line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("end_date")))
-        else:
-            line_bot_api.reply_message(reply_token, build_main_menu_flex())
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบรูปแบบที่ถูกต้อง\n ตัวอย่าง: 13:00-13:50 ROMANCE"))
         return
 
     if state and state.get("action") == "showtime_mode":
-        allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "stop showtime"]
+        allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "stop showtime", "exit", "ออก"]
+        # Check regex for delete
+        if re.match(r'^end showtime\s+\d+$', text_lower):
+             allowed.append(text_lower)
+        
         if text_lower not in allowed and text not in allowed:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⏸️ ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⏸️ ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือ 'exit' เพื่อออก"))
             return
 
     if text in ["ยกเลิก", "cancel"]:
@@ -1001,23 +958,26 @@ def handle_text(event):
                     else:
                         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ แก้ไขไม่สำเร็จ"))
                 else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ ไม่พบรายการ ID {inline_id:04d}"))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"️ ไม่พบรายการ ID {inline_id:04d}"))
                 return
-            except:
-                pass
+            except: pass
         expenses = get_all_expenses(trip['id'])
         if not expenses:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีรายการค่าใช้จ่ายให้แก้ไข"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="️ ไม่มีรายการค่าใช้จ่ายให้แก้ไข"))
             return
-        if state:
-            clear_state(user_id)
-        msg = "✏️ เลือกรายการที่ต้องการแก้ไขยอดเงิน (พิมพ์ ID 4 หลัก):\n=======================\n"
+        
+        # --- Feature 5: Flex Message for edit list ---
+        lines_edit = []
         for exp in expenses:
-            short_name = exp['item_name'][:35]
-            msg += f"ID {exp['id']:04d}. {short_name}\n   💰 {exp['amount']:,.2f} บาท\n"
-        msg += "\n=======================\n👉 พิมพ์ 'edit 0042 500' เพื่อเปลี่ยน ID 42 เป็น 500 บาท"
-        set_state(user_id, {"action": "edit_selection", "expenses": expenses})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
+            short_name = exp['item_name'][:30]
+            lines_edit.append(f"ID {exp['id']:04d} | {short_name} | {exp['amount']:,.2f} บาท")
+            
+        line_bot_api.reply_message(reply_token, build_report_flex(
+            title="✏️ เลือกรายการแก้ไข",
+            subtitle="พิมพ์: edit [ID] [ยอดใหม่] เช่น edit 0042 500",
+            lines=lines_edit,
+            alt_text="แก้ไขรายการ"
+        ))
         return
 
     if state and state.get("action") == "edit_selection":
@@ -1034,7 +994,7 @@ def handle_text(event):
                     })
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✏️ แก้ไขรายการ ID {selected['id']:04d}: {selected['item_name'][:50]}\n💰 ยอดเดิม: {selected['amount']:,.2f} บาท\n\n👉 พิมพ์จำนวนเงินใหม่"))
                 else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ ไม่พบรายการ ID {expense_id}"))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"️ ไม่พบรายการ ID {expense_id}"))
                     clear_state(user_id)
             elif len(parts) >= 2:
                 expense_id, new_amount = int(parts[0]), float(parts[1].replace(',', ''))
@@ -1042,7 +1002,7 @@ def handle_text(event):
                 if selected and new_amount > 0 and update_expense_amount(selected['id'], new_amount):
                     line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ แก้ไขรายการ ID {selected['id']:04d} จาก {selected['amount']:,.2f} บาท เป็น {new_amount:,.2f} บาท เรียบร้อย!"))
                 else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบ ID หรือจำนวนเงินไม่ถูกต้อง"))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text="️ ไม่พบ ID หรือจำนวนเงินไม่ถูกต้อง"))
                 clear_state(user_id)
         except:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุ ID และจำนวนเงินให้ถูกต้อง"))
@@ -1052,8 +1012,7 @@ def handle_text(event):
     if state and state.get("action") == "edit_amount":
         try:
             new_amount = float(text_lower.replace(',', ''))
-            if new_amount <= 0:
-                raise ValueError
+            if new_amount <= 0: raise ValueError
             eid = state["expense_id"]
             old = state["old_amount"]
             item = state["expense_item"]
@@ -1068,10 +1027,8 @@ def handle_text(event):
 
     if text == "id":
         msg = f"🔑 User ID: {user_id}"
-        if group_id:
-            msg += f"\n👥 Group ID: {group_id}"
-        else:
-            msg += "\nℹ️ แชทนี้เป็น DM"
+        if group_id: msg += f"\n👥 Group ID: {group_id}"
+        else: msg += "\nℹ️ แชทนี้เป็น DM"
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
@@ -1080,20 +1037,20 @@ def handle_text(event):
         if not trip_name:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป"))
             return
-        if not supabase:
-            return
+        if not supabase: return
         try:
             supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
             supabase.table("trips").insert({
                 "title": trip_name, "status": "active",
                 "line_group_id": group_id, "creator_id": user_id
             }).execute()
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f" เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
         except Exception as e:
             logger.error(f"Create trip error: {e}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ สร้างทริปไม่สำเร็จ"))
         return
 
+    # --- Feature 5: Flex Message for Summary (ยอด) ---
     if text == "ยอด" or text_lower == "sum":
         trip = get_active_trip(user_id, group_id)
         if not trip:
@@ -1103,50 +1060,63 @@ def handle_text(event):
         if not expenses:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="💵 ยังไม่มีรายการค่าใช้จ่าย"))
             return
+        
         total_thb = 0
         categories = {}
         for exp in expenses:
             amt_thb = exp['amount']
             curr = exp.get('currency', 'THB')
-            if curr != 'THB':
-                amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
+            if curr != 'THB': amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
             total_thb += amt_thb
             tag = exp.get('tag') or '#ทั่วไป'
-            if tag not in categories:
-                categories[tag] = {'total': 0, 'participants': set()}
+            if tag not in categories: categories[tag] = {'total': 0, 'participants': set()}
             categories[tag]['total'] += amt_thb
             ppl = exp.get('participants') or []
-            if isinstance(ppl, str):
-                ppl = [p.strip() for p in ppl.split() if p.strip()]
+            if isinstance(ppl, str): ppl = [p.strip() for p in ppl.split() if p.strip()]
             if not ppl:
                 payer = exp.get('payer_name') or get_display_name(exp['line_user_id'], group_id)
                 ppl = [payer]
             for p in ppl:
-                if p:
-                    categories[tag]['participants'].add(str(p))
-        lines = [f"ยอดรวม {total_thb:,.2f}"]
+                if p: categories[tag]['participants'].add(str(p))
+        
+        lines = [f"ยอดรวม {total_thb:,.2f} บาท"]
         for tag, data in sorted(categories.items()):
             ppl_str = " ".join(sorted(data['participants']))
             lines.append(f"{tag} {data['total']:,.0f} {ppl_str}")
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="\n".join(lines)))
+
+        line_bot_api.reply_message(reply_token, build_report_flex(
+            title=f"💰 ยอดรวมทริป: {trip['title']}",
+            subtitle=None,
+            lines=lines,
+            alt_text="ยอดรวม"
+        ))
         return
 
+    # --- Bug 1 Fix: ยอดวันนี้ with date parser ---
     if text == "ยอดวันนี้" or text_lower == "ยอดวันนี้" or text_lower.startswith("ยอดวันนี้ "):
         parts = text.split()
         target_curr = "THB"
         if len(parts) > 1:
             t = _normalize_currency(parts[1])
             target_curr = "JPY" if t == "JYP" else (t or parts[1].upper())
-        today_str = (datetime.now() + timedelta(hours=7)).strftime("%Y-%m-%d")
+        
+        # ใช้เวลาปัจจุบันไทยเพื่อเทียบ
+        now_thai = datetime.now() + timedelta(hours=7)
+        today_str = now_thai.strftime("%Y-%m-%d")
+
         trip = get_active_trip(user_id, group_id)
         if not trip:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
+        
         expenses = get_all_expenses(trip['id'])
-        today_exp = [e for e in expenses if e.get('created_at', '').startswith(today_str)]
+        # แก้ไข filter: ใช้ _to_thai_date_str
+        today_exp = [e for e in expenses if _to_thai_date_str(e.get('created_at', '')) == today_str]
+        
         if not today_exp:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ℹ️ วันนี้ ({today_str}) ยังไม่มีรายจ่าย"))
             return
+        
         total_thb = 0
         categories = {}
         currency_totals = {}
@@ -1154,22 +1124,19 @@ def handle_text(event):
             curr = exp.get('currency', 'THB')
             currency_totals[curr] = currency_totals.get(curr, 0) + (exp.get('amount') or 0)
             amt_thb = exp['amount']
-            if curr != 'THB':
-                amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
+            if curr != 'THB': amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
             total_thb += amt_thb
             tag = exp.get('tag') or '#ทั่วไป'
-            if tag not in categories:
-                categories[tag] = {'total_thb': 0, 'participants': set()}
+            if tag not in categories: categories[tag] = {'total_thb': 0, 'participants': set()}
             categories[tag]['total_thb'] += amt_thb
             ppl = exp.get('participants') or []
-            if isinstance(ppl, str):
-                ppl = [p.strip() for p in ppl.split() if p.strip()]
+            if isinstance(ppl, str): ppl = [p.strip() for p in ppl.split() if p.strip()]
             if not ppl:
                 payer = exp.get('payer_name') or get_display_name(exp['line_user_id'], group_id)
                 ppl = [payer]
             for p in ppl:
-                if p:
-                    categories[tag]['participants'].add(str(p))
+                if p: categories[tag]['participants'].add(str(p))
+        
         rate_to_target = get_exchange_rate("THB", target_curr) if target_curr != "THB" else 1.0
         total_target = total_thb * rate_to_target
         subtitle_parts = []
@@ -1181,6 +1148,7 @@ def handle_text(event):
             subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท (≈ {total_target:,.2f} {target_curr})")
         else:
             subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท")
+        
         lines = []
         for tag, data in sorted(categories.items()):
             ppl_str = " ".join(sorted(data['participants']))
@@ -1189,8 +1157,9 @@ def handle_text(event):
                 converted = data['total_thb'] * rate_to_target
                 line += f" (≈ {converted:,.2f} {target_curr})"
             lines.append(line)
+        
         line_bot_api.reply_message(reply_token, build_report_flex(
-            title=f"📅 ยอดวันนี้ ({today_str})",
+            title=f" ยอดวันนี้ ({today_str})",
             subtitle="\n".join(subtitle_parts),
             lines=lines,
             alt_text="ยอดวันนี้"
@@ -1205,12 +1174,10 @@ def handle_text(event):
         currency_code = "THB"
         if text.startswith("จบทริป "):
             parts = text.split()
-            if len(parts) >= 2:
-                currency_code = parts[1].upper()
+            if len(parts) >= 2: currency_code = parts[1].upper()
         elif text_lower.startswith("end trip "):
             parts = text_lower.split()
-            if len(parts) >= 3:
-                currency_code = parts[2].upper()
+            if len(parts) >= 3: currency_code = parts[2].upper()
         set_state(user_id, {
             "action": "end_trip", "trip_id": trip['id'],
             "trip_title": trip['title'], "currency_code": currency_code
@@ -1224,8 +1191,7 @@ def handle_text(event):
     if state and state.get("action") == "end_trip":
         try:
             num_people = int(text)
-            if num_people <= 0:
-                raise ValueError
+            if num_people <= 0: raise ValueError
         except:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
             return
@@ -1243,42 +1209,32 @@ def handle_text(event):
         exchange_rate = 1
         if currency_code != "THB":
             rate = get_exchange_rate("THB", currency_code)
-            if rate:
-                exchange_rate = rate
-            else:
-                currency_code = "THB"
+            if rate: exchange_rate = rate
+            else: currency_code = "THB"
         msg = f"🚀 ทริป: {trip_title}\n👥 จำนวนคน: {real_n}\n\n"
         if real_people and num_people != real_n:
-            msg += f"⚠️ จำนวนคนที่คุณพิมพ์ ({num_people}) ไม่ตรงกับที่พบในรายการ ({real_n})\n\n"
+            msg += f"️ จำนวนคนที่คุณพิมพ์ ({num_people}) ไม่ตรงกับที่พบในรายการ ({real_n})\n\n"
         if currency_code != "THB" and exchange_rate != 1:
             msg += f"💱 อัตราแลกเปลี่ยน: 1 THB = {exchange_rate:.4f} {currency_code}\n\n"
             msg += f"📉 ยอดหารเฉลี่ย:\n   • {avg:,.2f} บาท/คน\n   • ≈ {avg * exchange_rate:,.2f} {currency_code}/คน\n\n"
         else:
-            msg += f"📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n\n"
+            msg += f" ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n\n"
         msg += "💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
         for name in real_people:
             paid = paid_totals.get(name, 0.0)
             share = share_totals.get(name, 0.0)
             diff = paid - share
             if currency_code != "THB" and exchange_rate != 1:
-                if diff > 0:
-                    msg += f"• {name}: รับคืน {diff:,.2f} บาท (≈ {diff * exchange_rate:,.2f} {currency_code})\n"
-                elif diff < 0:
-                    msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท (≈ {abs(diff) * exchange_rate:,.2f} {currency_code})\n"
-                else:
-                    msg += f"• {name}: เรียบร้อยแล้ว\n"
+                if diff > 0: msg += f"• {name}: รับคืน {diff:,.2f} บาท (≈ {diff * exchange_rate:,.2f} {currency_code})\n"
+                elif diff < 0: msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท (≈ {abs(diff) * exchange_rate:,.2f} {currency_code})\n"
+                else: msg += f"• {name}: เรียบร้อยแล้ว\n"
             else:
-                if diff > 0:
-                    msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
-                elif diff < 0:
-                    msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
-                else:
-                    msg += f"• {name}: เรียบร้อยแล้ว\n"
+                if diff > 0: msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
+                elif diff < 0: msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
+                else: msg += f"• {name}: เรียบร้อยแล้ว\n"
         try:
-            if supabase:
-                supabase.table("trips").update({"status": "closed", "currency_code": currency_code}).eq("id", trip_id).execute()
-        except Exception as e:
-            logger.error(f"Close trip error: {e}")
+            if supabase: supabase.table("trips").update({"status": "closed", "currency_code": currency_code}).eq("id", trip_id).execute()
+        except Exception as e: logger.error(f"Close trip error: {e}")
         clear_state(user_id)
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
@@ -1302,8 +1258,7 @@ def handle_text(event):
         return
 
     if text in ["ประวัติ", "history"]:
-        if not supabase:
-            return
+        if not supabase: return
         try:
             res = supabase.table("trips").select("*").order("created_at", desc=True).limit(10).execute()
             all_trips = res.data if res.data else []
@@ -1362,12 +1317,12 @@ def handle_text(event):
         events = get_active_events()
         base_url = "https://line-chat-bot-trip-manager.onrender.com"
         if not events:
-            msg = f"🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่ (หรือทุกงานหมดอายุ/ถูกปิดแล้ว)\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
+            msg = f" ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่ (หรือทุกงานหมดอายุ/ถูกปิดแล้ว)\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
         else:
             msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\n"
             for i, e in enumerate(events, 1):
                 msg += f"{i}. งาน: {e.get('name', '-')}\n⏰ เวลาขาย: {e.get('saleTime', '-')}\n🔗 ลิงก์งาน: {e.get('url', '-')}\n-----------------------\n"
-            msg += f"\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
+            msg += f"\n ลิงก์ควบคุมแผงระบบ:\n{base_url}"
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
@@ -1377,7 +1332,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี Event ที่กำลังทำงานอยู่"))
             return
         set_state(user_id, {"action": "stop_event", "events": events})
-        msg = "🚫 เลือกหมายเลข Event ที่คุณต้องการสั่งหยุดทำงาน (Stop):\n=======================\n"
+        msg = " เลือกหมายเลข Event ที่คุณต้องการสั่งหยุดทำงาน (Stop):\n=======================\n"
         for i, e in enumerate(events, 1):
             msg += f"{i}. งาน: {e.get('name', '-')}\n🛑 (ID: {e.get('id', '-')})\n-----------------------\n"
         msg += "👉 พิมพ์เฉพาะ [ตัวเลขลำดับ] เพื่อระบุเลือกปิดงานชิ้นนั้นได้เลยครับ"
@@ -1385,8 +1340,7 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "stop_event":
-        if not supabase:
-            return
+        if not supabase: return
         try:
             choice = int(text_lower) - 1
             events = state["events"]
@@ -1405,8 +1359,9 @@ def handle_text(event):
         return
 
     # --- BLOCK 3: Enhanced Expense Parsing ---
+    # จะทำงานก็ต่อเมื่อ trip มีอยู่ และ state ไม่ใช่ state ที่ต้องรอ input
     trip = get_active_trip(user_id, group_id)
-    if trip and not (state and state.get("action") == "showtime_mode"):
+    if trip and not (state and state.get("action") in SLIP_STATES):
         default_payer = get_display_name(user_id, group_id)
         payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
         if amount and amount > 0:
@@ -1418,10 +1373,9 @@ def handle_text(event):
                     "item": item, "amount": amount,
                     "currency": currency, "tag": tag
                 })
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=" หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
                 return
-            if not supabase:
-                return
+            if not supabase: return
             try:
                 supabase.table("expenses").insert({
                     "trip_id": trip['id'], "line_user_id": user_id,
@@ -1435,7 +1389,7 @@ def handle_text(event):
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer}\nหาร: {ppl_txt}"))
             except Exception as e:
                 logger.error(f"Save expense error: {e}")
-        return
+    return
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
@@ -1443,10 +1397,9 @@ def handle_image(event):
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
     state = get_state(user_id)
-
+    
     if state and state.get("action") == "showtime_mode":
-        if not vision_client:
-            return
+        if not vision_client: return
         try:
             message_content = line_bot_api.get_message_content(event.message.id)
             image_bytes = b''.join(message_content.iter_content())
@@ -1460,21 +1413,16 @@ def handle_image(event):
                     for new_item in showtime_list:
                         found = False
                         for i, old_item in enumerate(schedule):
-                            if old_item["time"] == new_item["time"]:
-                                schedule[i] = new_item
-                                found = True
-                                break
-                        if not found:
-                            schedule.append(new_item)
+                            if old_item["time"] == new_item["time"]: schedule[i] = new_item; found = True; break
+                        if not found: schedule.append(new_item)
                     existing["schedule"] = sort_showtime_by_time(schedule)
                     existing["last_updated"] = datetime.now().isoformat()
                     save_showtime(existing)
-                    msg = "✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message() + "\n\n📝 พิมพ์เพิ่มเติม หรือ 'save'"
+                    msg = "✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message() + "\n\n พิมพ์เพิ่มเติม หรือ 'save'"
                 else:
                     state["showtime_temp"] = showtime_list
                     msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 **ตารางการแสดง:**\n\n"
-                    for item in showtime_list:
-                        msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
+                    for item in showtime_list: msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
                     msg += "\n👉 พิมพ์ 'save' เพื่อบันทึก"
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             else:
@@ -1486,17 +1434,16 @@ def handle_image(event):
 
     trip = get_active_trip(user_id, group_id)
     if not trip:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="️ ไม่มีทริปที่กำลังทำงานอยู่"))
         return
     set_state(user_id, {
         "action": "wait_slip_payer", "message_id": event.message.id,
         "trip_id": trip['id'], "group_id": group_id
     })
-    line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\n👤 กรุณาพิมพ์ชื่อคนที่ต้องรับผิดชอบยอดนี้\n(หรือพิมพ์ 'ฉัน' เพื่อใช้ชื่อคุณ)"))
+    line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\n กรุณาพิมพ์ชื่อคนที่ต้องรับผิดชอบยอดนี้\n(หรือพิมพ์ 'ฉัน' เพื่อใช้ชื่อคุณ)"))
 
 def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants):
-    if not vision_client or not supabase:
-        return
+    if not vision_client or not supabase: return
     try:
         message_content = line_bot_api.get_message_content(message_id)
         image_bytes = b''.join(message_content.iter_content())
@@ -1508,14 +1455,12 @@ def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token,
             result = supabase.table("expenses").insert({
                 "trip_id": trip_id, "line_user_id": user_id, "payer_name": payer_name,
                 "amount": amount, "item_name": f"บิล {timestamp}", "currency": "THB",
-                "tag": "#สลิป", "participants": participants,
-                "slip_url": f"slip_{message_id}"
+                "tag": "#สลิป", "participants": participants, "slip_url": f"slip_{message_id}"
             }).execute()
             new_id = result.data[0]['id'] if result.data else None
             ppl_txt = " ".join(participants or [])
             success_msg = f"✅ บันทึก {amount:,.2f} บาท (#สลิป)\nจ่าย: {payer_name}\nหาร: {ppl_txt}"
-            if new_id:
-                success_msg += f"\n✏️ แก้ไข: edit {new_id:04d} {amount}"
+            if new_id: success_msg += f"\n✏️ แก้ไข: edit {new_id:04d} {amount}"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
         else:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในรูป\n📌 ลองบันทึกด้วยข้อความ เช่น 'บอล ค่าเหล้า 500'"))
