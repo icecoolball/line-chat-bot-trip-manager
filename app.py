@@ -250,7 +250,7 @@ def format_showtime_message(show_date=None, event_name=None):
     for item in sorted_schedule:
         time_display = item.get('time', '-').replace('.', ':')
         artist = item.get('artist', '-')
-        msg += f"โฑ๏ธ {time_display} | ๐ค {artist}\n"
+        msg += f"⏱️ {time_display} | 🎤 {artist}\n"
     return msg
 
 # =================================================================
@@ -407,19 +407,19 @@ def extract_showtime(text):
         time_str = f"{time_match.group(1)}-{time_match.group(2)}".replace('.', ':')
         artist = None
         line_without_time = re.sub(time_pattern, '', line).strip()
-        line_without_time = re.sub(r'^[โฑ๏ธ๐ค๐“๏ธ๐ต]+\s*', '', line_without_time).strip()
+        line_without_time = re.sub(r'^[^\wก-๙A-Za-z0-9]+\s*', '', line_without_time).strip()
         if line_without_time and len(line_without_time) > 1: artist = line_without_time
         if not artist:
             for j in range(i - 1, max(i - 3, -1), -1):
                 prev_line = lines[j].strip()
                 if re.search(time_pattern, prev_line) or re.match(r'^[\d\s:.โ€“\-]+$', prev_line): continue
-                prev_clean = re.sub(r'^[โฑ๏ธ๐“โ๏ธ๐ต]+\s*', '', prev_line).strip()
+                prev_clean = re.sub(r'^[^\wก-๙A-Za-z0-9]+\s*', '', prev_line).strip()
                 if prev_clean and len(prev_clean) > 1: artist = prev_clean; break
         if not artist:
             for j in range(i + 1, min(i + 3, len(lines))):
                 next_line = lines[j].strip()
                 if re.search(time_pattern, next_line) or re.match(r'^[\d\s:.โ€“\-]+$', next_line): continue
-                next_clean = re.sub(r'^[โฑ๏ธ๐ค๐“โ๏ธ๐ต]+\s*', '', next_line).strip()
+                next_clean = re.sub(r'^[^\wก-๙A-Za-z0-9]+\s*', '', next_line).strip()
                 if next_clean and len(next_clean) > 1: artist = next_clean; break
         if not artist: artist = "Unknown"
         showtime_list.append({"time": time_str, "artist": artist})
@@ -660,7 +660,7 @@ def check_showtime_cron():
             try:
                 artist = item.get("artist", "-")
                 time_range = item.get("time", start)
-                line_bot_api.push_message(target, TextSendMessage(text=f"๐ค Showtime Now: {artist}\nโฑ๏ธ {time_range}\n๐ช {event_name}"))
+                line_bot_api.push_message(target, TextSendMessage(text=f"🎤 Showtime Now: {artist}\n⏱️ {time_range}\n🎪 {event_name}"))
                 st["last_alert_key"] = key; alerted += 1
             except Exception as e: logger.error(f"Showtime alert push error: {e}")
             break
@@ -876,7 +876,7 @@ def handle_text(event):
             state["showtime_temp"] = sort_showtime_by_time(state["showtime_temp"])
             set_state(user_id, state)
             msg = f"✅ เพิ่ม Showtime: {time_input} | {artist_input}\n\n📋 ตารางชั่วคราว:\n"
-            for item in state["showtime_temp"]: msg += f"โฑ๏ธ {item['time']} | ๐ค {item['artist']}\n"
+            for item in state["showtime_temp"]: msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
             msg += "\n👉 ส่งเพิ่มอีก หรือพิมพ์ 'save'"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
@@ -1391,7 +1391,7 @@ def handle_image(event):
                 else:
                     state["showtime_temp"] = showtime_list
                     msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 ตารางชั่วคราว:\n"
-                    for item in showtime_list: msg += f"โฑ๏ธ {item['time']} |  {item['artist']}\n"
+                    for item in showtime_list: msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
                     msg += "\n👉 พิมพ์ 'save' เพื่อบันทึก"
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             else:
