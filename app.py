@@ -61,6 +61,14 @@ else:
 
 user_state = {}
 STATE_TIMEOUT_SECONDS = 600
+SHOWTIME_ACTIONS = {
+    "showtime_mode",
+    "wait_showtime_add_confirm",
+    "wait_showtime_event_name",
+    "wait_showtime_date",
+    "wait_end_showtime_event_index",
+    "wait_end_showtime_confirm",
+}
 
 # =================================================================
 # State Management
@@ -287,6 +295,7 @@ def build_showtime_command_text():
     return (
         "📋 เมนู Showtime:\n"
         "- menu showtime\n"
+        "- state\n"
         "- showtime\n"
         "- showtime [เลข]\n"
         "- เพิ่ม\n"
@@ -320,6 +329,19 @@ def format_showtime_message(show_date=None, event_name=None):
         artist = item.get('artist', '-')
         msg += f"⏱️ {time_display} | 🎤 {artist}\n"
     return msg
+
+def build_state_text(state):
+    if state and state.get("action") in SHOWTIME_ACTIONS:
+        event_name = state.get("event_name") or "-"
+        show_date = state.get("show_date") or "ไม่ระบุ"
+        action = state.get("action") or "-"
+        return (
+            "🎤 ตอนนี้อยู่ในโหมด Showtime\n"
+            f"event: {event_name}\n"
+            f"วันที่จัดแสดง: {show_date}\n"
+            f"state: {action}"
+        )
+    return "📋 ตอนนี้อยู่ในโหมดปกติ"
 
 # =================================================================
 # Currency & Expense Helpers
@@ -823,17 +845,13 @@ def handle_text(event):
     group_id = getattr(event.source, 'group_id', None)
     reply_token = event.reply_token
     state = get_state(user_id)
-    showtime_actions = {
-        "showtime_mode",
-        "wait_showtime_add_confirm",
-        "wait_showtime_event_name",
-        "wait_showtime_date",
-        "wait_end_showtime_event_index",
-        "wait_end_showtime_confirm",
-    }
+
+    if text_lower == "state":
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=build_state_text(state)))
+        return
 
     if text in ["menu showtime", "showtime menu"]:
-        if state and state.get("action") in showtime_actions:
+        if state and state.get("action") in SHOWTIME_ACTIONS:
             line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("show_date")))
         else:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ใช้ 'menu showtime' ได้เฉพาะตอนอยู่ในโหมด Showtime"))
@@ -1141,6 +1159,10 @@ def handle_text(event):
     # --- Normal Commands ---
     if text in ["เมนู", "menu", "help"]:
         line_bot_api.reply_message(reply_token, build_main_menu_flex())
+        return
+
+    if text_lower in ["exit", "ออก"]:
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="📋 ตอนนี้อยู่ในโหมดปกติ\nไม่ได้อยู่ในโหมด Showtime"))
         return
 
     if text in ["ยกเลิก", "cancel"]:
@@ -1498,14 +1520,6 @@ def handle_image(event):
     reply_token = event.reply_token
     state = get_state(user_id)
     
-    showtime_actions = {
-        "showtime_mode",
-        "wait_showtime_add_confirm",
-        "wait_showtime_event_name",
-        "wait_showtime_date",
-        "wait_end_showtime_event_index",
-        "wait_end_showtime_confirm",
-    }
     if state and state.get("action") == "showtime_mode":
         if not vision_client: return
         try:
@@ -1541,7 +1555,7 @@ def handle_image(event):
             logger.error(traceback.format_exc())
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้"))
         return
-    if state and state.get("action") in showtime_actions:
+    if state and state.get("action") in SHOWTIME_ACTIONS:
         line_bot_api.reply_message(
             reply_token,
             TextSendMessage(text="📌 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือพิมพ์ 'menu showtime' เพื่อเปิดเมนู"),
