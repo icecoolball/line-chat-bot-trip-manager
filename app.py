@@ -955,7 +955,7 @@ def handle_text(event):
             set_state(user_id, {"action": "wait_showtime_event_name"})
             line_bot_api.reply_message(reply_token, TextSendMessage(text="กรุณาระบุชื่อ Showtime/Event"))
             return
-        m = re.match(r"^showtime\\s+(\\d+)$", text_lower)
+        m = re.match(r"^showtime\s+(\d+)$", text_lower)
         if m:
             idx = int(m.group(1))
             if idx < 1 or idx > len(events):
