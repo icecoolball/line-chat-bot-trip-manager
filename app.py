@@ -232,6 +232,18 @@ def build_showtime_event_list_message():
         msg += f"{i}. {ev['event_name']} ({ev['count']} วง)\n"
     return msg
 
+def build_showtime_command_text():
+    return (
+        "📋 เมนู Showtime:\n"
+        "- showtime\n"
+        "- showtime [เลข]\n"
+        "- เพิ่ม\n"
+        "- end showtime\n"
+        "- save\n"
+        "- exit\n"
+        "- cancel"
+    )
+
 def sort_showtime_by_time(schedule):
     def get_sort_key(item):
         time_str = item.get("time", "00:00").split('-')[0]
@@ -943,12 +955,24 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_add_confirm":
-        if text in ["เมนู", "menu", "help"]:
-            line_bot_api.reply_message(reply_token, build_main_menu_flex())
+        if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมด Showtime แล้ว"))
+            return
+        if text_lower in ["end showtime", "stop showtime"]:
+            events = list_showtime_events()
+            if not events:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี event ในระบบให้ลบ"))
+                return
+            msg = "🗑️ เลือก event ที่ต้องการลบ:\n"
+            for i, ev in enumerate(events, 1):
+                msg += f"{i}. 🎪 {ev['event_name']} ({ev['count']} วง)\n"
+            msg += "\nพิมพ์ 'end showtime [เลข]' เช่น end showtime 1\nหรือ 'exit' เพื่อออกจากโหมด"
+            set_state(user_id, {"action": "wait_end_showtime_event_index", "events": events, "target_id": group_id or user_id, "group_id": group_id})
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
         events = state.get("events", [])
         if text_lower in ["เพิ่ม", "add", "yes", "y"]:
@@ -966,12 +990,12 @@ def handle_text(event):
             msg += "\n\nพิมพ์ 'เพิ่ม' ถ้าต้องการเพิ่มตารางใหม่"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'เพิ่ม' หรือ 'showtime [เลข]'"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'เพิ่ม' / 'showtime [เลข]' / 'end showtime'"))
         return
 
     if state and state.get("action") == "wait_showtime_event_name":
-        if text in ["เมนู", "menu", "help"]:
-            line_bot_api.reply_message(reply_token, build_main_menu_flex())
+        if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -986,8 +1010,8 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_date":
-        if text in ["เมนู", "menu", "help"]:
-            line_bot_api.reply_message(reply_token, build_main_menu_flex())
+        if text in ["เมนู", "menu", "help", "menu showtime", "showtime menu"]:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1367,6 +1391,14 @@ def handle_image(event):
     reply_token = event.reply_token
     state = get_state(user_id)
     
+    showtime_actions = {
+        "showtime_mode",
+        "wait_showtime_add_confirm",
+        "wait_showtime_event_name",
+        "wait_showtime_date",
+        "wait_end_showtime_event_index",
+        "wait_end_showtime_confirm",
+    }
     if state and state.get("action") == "showtime_mode":
         if not vision_client: return
         try:
@@ -1400,6 +1432,12 @@ def handle_image(event):
             logger.error(f"Showtime OCR error: {e}")
             logger.error(traceback.format_exc())
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้"))
+        return
+    if state and state.get("action") in showtime_actions:
+        line_bot_api.reply_message(
+            reply_token,
+            TextSendMessage(text="📌 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง Showtime"),
+        )
         return
 
     trip = get_active_trip(user_id, group_id)
