@@ -142,7 +142,7 @@ def build_showtime_menu_flex(show_date=None):
                 contents=[
                     ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='💾 บันทึก & ออก', text='save')),
                     ButtonComponent(style='secondary', height='md', action=MessageAction(label='👁️ ดูตาราง', text='showtime')),
-                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='✏️ แก้ไขข้อความ', text='editshowtime')),
+                    ButtonComponent(style='secondary', height='md', action=MessageAction(label='✏️ แก้ไขข้อความ', text='edit showtime')),
                     ButtonComponent(style='primary', color='#FF5551', height='md', action=MessageAction(label='🛑 จบ Showtime', text='end showtime')),
                     ButtonComponent(style='secondary', color='#888888', height='md', action=MessageAction(label='↩ ออก (Exit)', text='exit'))
                 ]
@@ -189,11 +189,13 @@ def save_showtime(showtime_data, event_name):
     try:
         supabase.table("showtimes").delete().eq("event_name", event_name).execute()
         schedule = showtime_data.get("schedule", [])
+        show_date = showtime_data.get("show_date")
         for item in schedule:
             supabase.table("showtimes").insert({
                 "time": item.get("time", ""),
                 "artist": item.get("artist", ""),
-                "event_name": event_name
+                "event_name": event_name,
+                "show_date": item.get("show_date", show_date)
             }).execute()
         return True
     except Exception as e:
@@ -238,6 +240,7 @@ def build_showtime_command_text():
         "- showtime\n"
         "- showtime [เลข]\n"
         "- เพิ่ม\n"
+        "- add showtime\n"
         "- end showtime\n"
         "- save\n"
         "- exit\n"
@@ -255,6 +258,9 @@ def sort_showtime_by_time(schedule):
 
 def format_showtime_message(show_date=None, event_name=None):
     showtime = load_showtime(event_name)
+    if not show_date and showtime.get("schedule"):
+        first_row = showtime["schedule"][0]
+        show_date = first_row.get("show_date") or first_row.get("event_date") or first_row.get("date")
     date_header = f"📅 วันที่จัดแสดง: {show_date}\n" if show_date else ""
     if not showtime.get("schedule"): return f"{date_header}ℹ️ ยังไม่มีข้อมูล Showtime"
     sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
@@ -814,6 +820,7 @@ def handle_text(event):
                 event_name = state.get("event_name")
                 existing = load_showtime(event_name)
                 existing["schedule"] = sort_showtime_by_time(state["showtime_temp"])
+                existing["show_date"] = state.get("show_date")
                 existing["last_updated"] = datetime.now().isoformat()
                 ok = save_showtime(existing, event_name)
                 if not ok:
@@ -867,6 +874,7 @@ def handle_text(event):
                     updated = True
             if updated:
                 existing["schedule"] = sort_showtime_by_time(schedule)
+                existing["show_date"] = state.get("show_date")
                 existing["last_updated"] = datetime.now().isoformat()
                 save_showtime(existing, event_name)
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message(state.get("show_date"), event_name) + "\n\nพิมพ์ 'save' เพื่อจบ"))
@@ -914,12 +922,12 @@ def handle_text(event):
         if text_lower == "showtime":
             line_bot_api.reply_message(reply_token, [TextSendMessage(text=format_showtime_message(state.get("show_date"), state.get("event_name"))), build_showtime_menu_flex(state.get("show_date"))])
             return
-        if text_lower in ["editshowtime", "update showtime"]:
+        if text_lower in ["edit showtime", "update showtime", "editshowtime"]:
             set_state(user_id, {**state, "edit_mode": True})
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✏️ แก้ไข Showtime\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))))
             return
 
-        allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "exit", "ออก"]
+        allowed = ["save", "showtime", "เพิ่ม", "add showtime", "edit showtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "exit", "ออก"]
         if re.match(r'^end showtime\s+\d+$', text_lower): allowed.append(text_lower)
         if text_lower not in allowed and text not in allowed:
             if not re.match(time_pattern_input, text):
@@ -964,7 +972,7 @@ def handle_text(event):
         events = list_showtime_events()
         if events:
             msg = build_showtime_event_list_message()
-            msg += "\n\nพิมพ์ 'เพิ่ม' เพื่อเพิ่มตารางใหม่\nหรือพิมพ์ 'showtime [เลข]' เพื่อดูตารางเดิม"
+            msg += "\n\nพิมพ์ 'เพิ่ม' เพื่อเพิ่มตารางใหม่\nหรือพิมพ์ 'add showtime' เพื่อเพิ่มตารางใหม่ (English)\nหรือพิมพ์ 'showtime [เลข]' เพื่อดูตารางเดิม"
             set_state(user_id, {"action": "wait_showtime_add_confirm", "events": events})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
@@ -1004,7 +1012,7 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
         events = state.get("events", [])
-        if text_lower in ["เพิ่ม", "add", "yes", "y"]:
+        if text_lower in ["เพิ่ม", "add showtime", "yes", "y"]:
             set_state(user_id, {"action": "wait_showtime_event_name"})
             line_bot_api.reply_message(reply_token, TextSendMessage(text="กรุณาระบุชื่อ Showtime/Event"))
             return
@@ -1016,10 +1024,10 @@ def handle_text(event):
                 return
             selected = events[idx - 1]
             msg = format_showtime_message(None, selected["event_name"])
-            msg += "\n\nพิมพ์ 'เพิ่ม' ถ้าต้องการเพิ่มตารางใหม่"
+            msg += "\n\nพิมพ์ 'เพิ่ม' ถ้าต้องการเพิ่มตารางใหม่\nหรือพิมพ์ 'add showtime' (English)"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'เพิ่ม' / 'showtime [เลข]' / 'end showtime'"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'เพิ่ม' / 'add showtime' / 'showtime [เลข]' / 'end showtime'"))
         return
 
     if state and state.get("action") == "wait_showtime_event_name":
