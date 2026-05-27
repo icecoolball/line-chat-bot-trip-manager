@@ -171,6 +171,28 @@ def build_report_flex(title, subtitle, lines, alt_text="รายงาน"):
 # =================================================================
 # Showtime Management
 # =================================================================
+def load_showtime_event_meta(event_name):
+    if not supabase or not event_name:
+        return {}
+    try:
+        res = supabase.table("showtime_events").select("*").eq("event_name", event_name).limit(1).execute()
+        rows = res.data if res.data else []
+        return rows[0] if rows else {}
+    except Exception as e:
+        logger.error(f"Load showtime event meta error: {e}")
+        return {}
+
+def save_showtime_event_meta(event_name, show_date=None):
+    if not supabase or not event_name:
+        return False
+    try:
+        payload = {"event_name": event_name, "show_date": show_date}
+        supabase.table("showtime_events").upsert(payload, on_conflict="event_name").execute()
+        return True
+    except Exception as e:
+        logger.error(f"Save showtime event meta error: {e}")
+        return False
+
 def load_showtime(event_name=None):
     if not supabase: return {"schedule": [], "last_updated": None}
     try:
@@ -179,23 +201,30 @@ def load_showtime(event_name=None):
             query = query.eq("event_name", event_name)
         res = query.execute()
         schedule = res.data if res.data else []
-        return {"event_name": event_name, "schedule": schedule, "last_updated": datetime.now().isoformat()}
+        meta = load_showtime_event_meta(event_name) if event_name else {}
+        return {
+            "event_name": event_name,
+            "show_date": meta.get("show_date"),
+            "schedule": schedule,
+            "last_updated": datetime.now().isoformat()
+        }
     except Exception as e:
         logger.error(f"Load showtime error: {e}")
-        return {"event_name": event_name, "schedule": [], "last_updated": None}
+        return {"event_name": event_name, "show_date": None, "schedule": [], "last_updated": None}
 
 def save_showtime(showtime_data, event_name):
     if not supabase: return False
     try:
+        show_date = showtime_data.get("show_date")
+        if not save_showtime_event_meta(event_name, show_date):
+            return False
         supabase.table("showtimes").delete().eq("event_name", event_name).execute()
         schedule = showtime_data.get("schedule", [])
-        show_date = showtime_data.get("show_date")
         for item in schedule:
             supabase.table("showtimes").insert({
                 "time": item.get("time", ""),
                 "artist": item.get("artist", ""),
-                "event_name": event_name,
-                "show_date": item.get("show_date", show_date)
+                "event_name": event_name
             }).execute()
         return True
     except Exception as e:
@@ -207,11 +236,29 @@ def list_showtime_events():
     try:
         res = supabase.table("showtimes").select("event_name").execute()
         rows = res.data if res.data else []
+        meta_map = {}
+        try:
+            meta_res = supabase.table("showtime_events").select("event_name,show_date").execute()
+            meta_rows = meta_res.data if meta_res.data else []
+            for row in meta_rows:
+                name = (row.get("event_name") or "").strip()
+                if name:
+                    meta_map[name] = row.get("show_date")
+        except Exception as meta_err:
+            logger.warning(f"List showtime event meta error: {meta_err}")
         counts = {}
         for row in rows:
             name = (row.get("event_name") or "default").strip() or "default"
             counts[name] = counts.get(name, 0) + 1
-        return [{"event_name": k, "count": v} for k, v in sorted(counts.items(), key=lambda x: x[0].lower())]
+        events = []
+        all_names = set(counts.keys()) | set(meta_map.keys())
+        for name in sorted(all_names, key=lambda x: x.lower()):
+            events.append({
+                "event_name": name,
+                "count": counts.get(name, 0),
+                "show_date": meta_map.get(name)
+            })
+        return events
     except Exception as e:
         logger.error(f"List showtime events error: {e}")
         return []
@@ -220,6 +267,7 @@ def delete_showtime_event(event_name):
     if not supabase: return False
     try:
         supabase.table("showtimes").delete().eq("event_name", event_name).execute()
+        supabase.table("showtime_events").delete().eq("event_name", event_name).execute()
         return True
     except Exception as e:
         logger.error(f"Delete showtime event error: {e}")
@@ -231,7 +279,8 @@ def build_showtime_event_list_message():
         return "ยังไม่มีตาราง Showtime ในระบบ"
     msg = "ตาราง Showtime ที่มีอยู่:\n"
     for i, ev in enumerate(events, 1):
-        msg += f"{i}. {ev['event_name']} ({ev['count']} วง)\n"
+        date_text = f" | {ev['show_date']}" if ev.get("show_date") else ""
+        msg += f"{i}. {ev['event_name']} ({ev['count']} วง){date_text}\n"
     return msg
 
 def build_showtime_command_text():
@@ -258,9 +307,8 @@ def sort_showtime_by_time(schedule):
 
 def format_showtime_message(show_date=None, event_name=None):
     showtime = load_showtime(event_name)
-    if not show_date and showtime.get("schedule"):
-        first_row = showtime["schedule"][0]
-        show_date = first_row.get("show_date") or first_row.get("event_date") or first_row.get("date")
+    if not show_date:
+        show_date = showtime.get("show_date")
     show_date_text = show_date if show_date else "ไม่ระบุ"
     date_header = f"📅 วันที่จัดแสดง: {show_date_text}\n"
     if not showtime.get("schedule"): return f"{date_header}ℹ️ ยังไม่มีข้อมูล Showtime"
@@ -820,12 +868,12 @@ def handle_text(event):
             if state.get("showtime_temp"):
                 event_name = state.get("event_name")
                 existing = load_showtime(event_name)
-                existing["schedule"] = sort_showtime_by_time(state["showtime_temp"])
                 existing["show_date"] = state.get("show_date")
+                existing["schedule"] = sort_showtime_by_time(state["showtime_temp"])
                 existing["last_updated"] = datetime.now().isoformat()
                 ok = save_showtime(existing, event_name)
                 if not ok:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text="Save showtime failed (DB permission denied)."))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ บันทึก Showtime ไม่สำเร็จ"))
                     return
             clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="Showtime saved."))
@@ -969,11 +1017,16 @@ def handle_text(event):
         return
 
     # --- Entry: Start Showtime ---
+    if text_lower == "add showtime":
+        set_state(user_id, {"action": "wait_showtime_event_name"})
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="กรุณาระบุชื่อ Showtime/Event\nเช่น Big Mountain 2026"))
+        return
+
     if text_lower == "showtime":
         events = list_showtime_events()
         if events:
             msg = build_showtime_event_list_message()
-            msg += "\n\nพิมพ์ 'เพิ่ม' เพื่อเพิ่มตารางใหม่\nหรือพิมพ์ 'add showtime' เพื่อเพิ่มตารางใหม่ (English)\nหรือพิมพ์ 'showtime [เลข]' เพื่อดูตารางเดิม"
+            msg += "\n\nพิมพ์ 'เพิ่ม' เพื่อเพิ่มตารางใหม่\nหรือพิมพ์ 'showtime [เลข]' เพื่อดูตารางเดิม"
             set_state(user_id, {"action": "wait_showtime_add_confirm", "events": events})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
@@ -1025,7 +1078,7 @@ def handle_text(event):
                 return
             selected = events[idx - 1]
             msg = format_showtime_message(None, selected["event_name"])
-            msg += "\n\nพิมพ์ 'เพิ่ม' ถ้าต้องการเพิ่มตารางใหม่\nหรือพิมพ์ 'add showtime' (English)"
+            msg += "\n\nพิมพ์ 'เพิ่ม' ถ้าต้องการเพิ่มตารางใหม่"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
         line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'เพิ่ม' / 'add showtime' / 'showtime [เลข]' / 'end showtime'"))
@@ -1455,6 +1508,7 @@ def handle_image(event):
                             if old_item["time"] == new_item["time"]: schedule[i] = new_item; found = True; break
                         if not found: schedule.append(new_item)
                     existing["schedule"] = sort_showtime_by_time(schedule)
+                    existing["show_date"] = state.get("show_date")
                     existing["last_updated"] = datetime.now().isoformat()
                     save_showtime(existing, state.get("event_name"))
                     msg = "✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))
