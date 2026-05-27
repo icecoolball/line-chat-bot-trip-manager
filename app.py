@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import threading
+import traceback
 import requests
 import pandas as pd
 from io import BytesIO
@@ -32,9 +33,20 @@ handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
 
 creds_json = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_JSON')
 if creds_json:
-    creds_dict = json.loads(creds_json)
-    creds = service_account.Credentials.from_service_account_info(creds_dict)
-    vision_client = vision.ImageAnnotatorClient(credentials=creds)
+    try:
+        creds_dict = json.loads(creds_json)
+        creds = service_account.Credentials.from_service_account_info(creds_dict)
+        vision_client = vision.ImageAnnotatorClient(credentials=creds)
+        logger.info(
+            "Vision credential loaded: project_id=%s client_email=%s private_key_id=%s",
+            creds_dict.get("project_id"),
+            creds_dict.get("client_email"),
+            creds_dict.get("private_key_id"),
+        )
+    except Exception as e:
+        logger.error("Invalid GOOGLE_APPLICATION_CREDENTIALS_JSON: %s", e)
+        logger.error(traceback.format_exc())
+        vision_client = None
 else:
     logger.error("❌ GOOGLE_APPLICATION_CREDENTIALS_JSON missing")
     vision_client = None
@@ -1326,6 +1338,7 @@ def handle_image(event):
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบข้อมูล Showtime ในรูป"))
         except Exception as e:
             logger.error(f"Showtime OCR error: {e}")
+            logger.error(traceback.format_exc())
             line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้"))
         return
 
@@ -1372,4 +1385,5 @@ def serve_static(filename):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
