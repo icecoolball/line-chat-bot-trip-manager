@@ -34,3 +34,10 @@ __pycache__/
 ehthumbs.db
 Icon?
 Thumbs.db
+
+# AI Skills & Rules
+.cursorrules
+CODEX.md
+skills/personal/
+skills/in-progress/line-chatbot-trip-manager-80021c34aa9b.json
+line-chatbot-trip-manager-c41220529fac.json

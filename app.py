@@ -159,29 +159,56 @@ def build_report_flex(title, subtitle, lines, alt_text="รายงาน"):
 # =================================================================
 # Showtime Management
 # =================================================================
-def load_showtime():
+def load_showtime(event_name=None):
     if not supabase: return {"schedule": [], "last_updated": None}
     try:
-        res = supabase.table("showtimes").select("*").execute()
+        query = supabase.table("showtimes").select("*")
+        if event_name:
+            query = query.eq("event_name", event_name)
+        res = query.execute()
         schedule = res.data if res.data else []
-        return {"schedule": schedule, "last_updated": datetime.now().isoformat()}
+        return {"event_name": event_name, "schedule": schedule, "last_updated": datetime.now().isoformat()}
     except Exception as e:
         logger.error(f"Load showtime error: {e}")
-        return {"schedule": [], "last_updated": None}
+        return {"event_name": event_name, "schedule": [], "last_updated": None}
 
-def save_showtime(showtime_data):
+def save_showtime(showtime_data, event_name):
     if not supabase: return False
     try:
-        supabase.table("showtimes").delete().neq("id", 0).execute()
+        supabase.table("showtimes").delete().eq("event_name", event_name).execute()
         schedule = showtime_data.get("schedule", [])
         for item in schedule:
             supabase.table("showtimes").insert({
                 "time": item.get("time", ""),
-                "artist": item.get("artist", "")
+                "artist": item.get("artist", ""),
+                "event_name": event_name
             }).execute()
         return True
     except Exception as e:
         logger.error(f"Save showtime error: {e}")
+        return False
+
+def list_showtime_events():
+    if not supabase: return []
+    try:
+        res = supabase.table("showtimes").select("event_name").execute()
+        rows = res.data if res.data else []
+        counts = {}
+        for row in rows:
+            name = (row.get("event_name") or "default").strip() or "default"
+            counts[name] = counts.get(name, 0) + 1
+        return [{"event_name": k, "count": v} for k, v in sorted(counts.items(), key=lambda x: x[0].lower())]
+    except Exception as e:
+        logger.error(f"List showtime events error: {e}")
+        return []
+
+def delete_showtime_event(event_name):
+    if not supabase: return False
+    try:
+        supabase.table("showtimes").delete().eq("event_name", event_name).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Delete showtime event error: {e}")
         return False
 
 def sort_showtime_by_time(schedule):
@@ -193,8 +220,8 @@ def sort_showtime_by_time(schedule):
         except: return (2, 0)
     return sorted(schedule, key=get_sort_key)
 
-def format_showtime_message(show_date=None):
-    showtime = load_showtime()
+def format_showtime_message(show_date=None, event_name=None):
+    showtime = load_showtime(event_name)
     if not showtime.get("schedule"): return "ℹ️ ยังไม่มีข้อมูล Showtime"
     sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
     date_header = f"📅 วันที่จัดแสดง: {show_date}\n" if show_date else ""
@@ -576,8 +603,6 @@ def check_showtime_cron():
     
     now = datetime.now() + timedelta(hours=7)
     ended = 0; alerted = 0
-    showtime = load_showtime()
-    schedule = showtime.get("schedule", []) or []
 
     def _start_hhmm(t):
         if not t: return None
@@ -589,6 +614,10 @@ def check_showtime_cron():
 
     for uid, st in list(user_state.items()):
         if st.get("action") != "showtime_mode": continue
+        event_name = st.get("event_name")
+        if not event_name: continue
+        showtime = load_showtime(event_name)
+        schedule = showtime.get("schedule", []) or []
         end_date = st.get("end_date")
         if end_date:
             try:
@@ -610,7 +639,7 @@ def check_showtime_cron():
             try:
                 artist = item.get("artist", "-")
                 time_range = item.get("time", start)
-                line_bot_api.push_message(target, TextSendMessage(text=f"🎤 Showtime Now: {artist}\n⏱️ {time_range}"))
+                line_bot_api.push_message(target, TextSendMessage(text=f"🎤 Showtime Now: {artist}\n⏱️ {time_range}\n🎪 {event_name}"))
                 st["last_alert_key"] = key; alerted += 1
             except Exception as e: logger.error(f"Showtime alert push error: {e}")
             break
@@ -749,47 +778,27 @@ def handle_text(event):
     if state and state.get("action") == "showtime_mode":
         if text_lower == "save":
             if state.get("showtime_temp"):
-                existing = load_showtime()
+                event_name = state.get("event_name")
+                existing = load_showtime(event_name)
                 existing["schedule"] = sort_showtime_by_time(state["showtime_temp"])
                 existing["last_updated"] = datetime.now().isoformat()
-                save_showtime(existing)
+                save_showtime(existing, event_name)
             clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ บันทึก Showtime เสร็จ!\n📸 กลับมารับสลิปปกติแล้ว"))
             return
 
         if text_lower in ["end showtime", "stop showtime"]:
-            showtime_data = load_showtime()
-            schedule = showtime_data.get("schedule", [])
-            if not schedule:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="ℹ️ ไม่มีตารางแสดง\nพิมพ์ 'exit' เพื่อออกจากโหมด Showtime"))
+            events = list_showtime_events()
+            if not events:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี event ในระบบให้ลบ"))
                 return
-            sorted_sched = sort_showtime_by_time(schedule)
-            msg = "🗑️ เลือก Showtime ที่ต้องการลบ:\n\n"
-            for i, item in enumerate(sorted_sched, 1):
-                msg += f"{i}. ⏱️ {item.get('time','-')} | 🎤 {item.get('artist','-')}\n"
+            msg = "🗑️ เลือก event ที่ต้องการลบ:\n"
+            for i, ev in enumerate(events, 1):
+                msg += f"{i}. 🎪 {ev['event_name']} ({ev['count']} วง)\n"
             msg += "\nพิมพ์ 'end showtime [เลข]' เช่น end showtime 1\nหรือ 'exit' เพื่อออกจากโหมด"
-            set_state(user_id, {**state, "action": "showtime_mode", "pending_delete_schedule": sorted_sched})
+            set_state(user_id, {"action": "wait_end_showtime_event_index", "events": events, "target_id": group_id or user_id, "group_id": group_id})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
-
-        if state.get("pending_delete_schedule"):
-            m = re.match(r'^end showtime\s+(\d+)$', text_lower)
-            if m:
-                idx = int(m.group(1)) - 1
-                original_schedule = state["pending_delete_schedule"]
-                if 0 <= idx < len(original_schedule):
-                    removed = original_schedule[idx]
-                    showtime_data = load_showtime()
-                    current_sched = showtime_data.get("schedule", [])
-                    new_schedule = [s for s in current_sched if not (s.get("time") == removed.get("time") and s.get("artist") == removed.get("artist"))]
-                    showtime_data["schedule"] = new_schedule
-                    save_showtime(showtime_data)
-                    new_state = {k: v for k, v in state.items() if k != "pending_delete_schedule"}
-                    set_state(user_id, new_state)
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ ลบเรียบร้อย: {removed.get('time','-')} | {removed.get('artist','-')}\n\n" + format_showtime_message(state.get("show_date"))))
-                else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง"))
-                return
 
         # --- menu/help/exit ต้อง bypass ทุก state ใน showtime_mode (รวม edit_mode) ---
         if text in ["เมนู", "menu", "help"]:
@@ -804,7 +813,8 @@ def handle_text(event):
         if state.get("edit_mode"):
             lines = text.splitlines()
             updated = False
-            existing = load_showtime()
+            event_name = state.get("event_name")
+            existing = load_showtime(event_name)
             schedule = existing.get("schedule", [])
             time_pattern_input = r'^(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})\s+(.+)$'
             for line in lines:
@@ -822,8 +832,8 @@ def handle_text(event):
             if updated:
                 existing["schedule"] = sort_showtime_by_time(schedule)
                 existing["last_updated"] = datetime.now().isoformat()
-                save_showtime(existing)
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message() + "\n\nพิมพ์ 'save' เพื่อจบ"))
+                save_showtime(existing, event_name)
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message(state.get("show_date"), event_name) + "\n\nพิมพ์ 'save' เพื่อจบ"))
             else:
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบรูปแบบที่ถูกต้อง\nตัวอย่าง: 13:00-13:50 ROMANCE"))
             return
@@ -848,11 +858,11 @@ def handle_text(event):
             return
 
         if text_lower == "showtime":
-            line_bot_api.reply_message(reply_token, [TextSendMessage(text=format_showtime_message(state.get("show_date"))), build_showtime_menu_flex(state.get("show_date"))])
+            line_bot_api.reply_message(reply_token, [TextSendMessage(text=format_showtime_message(state.get("show_date"), state.get("event_name"))), build_showtime_menu_flex(state.get("show_date"))])
             return
         if text_lower in ["editshowtime", "update showtime"]:
             set_state(user_id, {**state, "edit_mode": True})
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="✏️ แก้ไข Showtime\n" + format_showtime_message(state.get("show_date"))))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✏️ แก้ไข Showtime\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))))
             return
 
         allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "exit", "ออก"]
@@ -862,9 +872,51 @@ def handle_text(event):
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="🔒 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือส่ง: 22:00-23:00 ชื่อวง"))
             return
 
+    if state and state.get("action") == "wait_end_showtime_event_index":
+        if text_lower in ["exit", "ออก"]:
+            clear_state(user_id)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมดลบ event แล้ว"))
+            return
+        m = re.match(r"^end\s+showtime\s+(\d+)$", text_lower)
+        if not m:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'end showtime [เลข]' หรือ 'exit'"))
+            return
+        events = state.get("events", [])
+        idx = int(m.group(1))
+        if idx < 1 or idx > len(events):
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ เลขไม่ถูกต้อง (1-{len(events)})"))
+            return
+        selected = events[idx - 1]
+        set_state(user_id, {"action": "wait_end_showtime_confirm", "event_name": selected["event_name"]})
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ยืนยันลบ event '{selected['event_name']}' ทั้งหมด?\nพิมพ์ 'yes' เพื่อยืนยัน หรือ 'exit' เพื่อยกเลิก"))
+        return
+
+    if state and state.get("action") == "wait_end_showtime_confirm":
+        if text_lower == "yes":
+            event_name = state.get("event_name")
+            ok = delete_showtime_event(event_name)
+            clear_state(user_id)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ ลบ event '{event_name}' เรียบร้อย" if ok else "❌ ลบ event ไม่สำเร็จ"))
+            return
+        if text_lower in ["exit", "ออก"]:
+            clear_state(user_id)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกการลบ event แล้ว"))
+            return
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'yes' เพื่อยืนยัน หรือ 'exit' เพื่อยกเลิก"))
+        return
+
     # --- Entry: Start Showtime ---
     if text_lower == "showtime":
-        set_state(user_id, {"action": "wait_showtime_date"})
+        set_state(user_id, {"action": "wait_showtime_event_name"})
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="🎪 กรุณาระบุชื่อ event\nเช่น Big Mountain 2026"))
+        return
+
+    if state and state.get("action") == "wait_showtime_event_name":
+        event_name = text.strip()
+        if not event_name:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ชื่อ event ห้ามว่าง"))
+            return
+        set_state(user_id, {"action": "wait_showtime_date", "event_name": event_name})
         line_bot_api.reply_message(reply_token, TextSendMessage(text="📅 กรุณาระบุวันที่จัดแสดง (YYYY-MM-DD)\nเช่น 2026-05-30\n(พิมพ์ 'ข้าม' หากไม่ต้องการกำหนด)"))
         return
 
@@ -875,11 +927,11 @@ def handle_text(event):
                 parsed = datetime.strptime(text.strip(), "%Y-%m-%d")
                 show_date = parsed.strftime("%Y-%m-%d")
             except ValueError:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ รูปแบบวันที่ไม่ถูกต้อง กรุณาใช้ YYYY-MM-DD หรือพิมพ์ 'ข้าม'"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ รูปแบบวันที่ไม่ถูกต้อง ใช้ YYYY-MM-DD หรือพิมพ์ 'ข้าม'"))
                 return
-        # show_date = วันที่จัดแสดง, end_date = วันสิ้นสุด showtime mode (ใช้วันเดียวกัน)
-        set_state(user_id, {"action": "showtime_mode", "show_date": show_date, "end_date": show_date, "edit_mode": False, "target_id": group_id or user_id, "group_id": group_id, "last_alert_key": None})
-        msg = format_showtime_message(show_date) + "\n\n📸 ส่งรูป Showtime ใหม่เพื่ออัปเดต หรือพิมพ์เวลาเพื่อเพิ่มรายการ"
+        event_name = state.get("event_name")
+        set_state(user_id, {"action": "showtime_mode", "event_name": event_name, "show_date": show_date, "end_date": show_date, "edit_mode": False, "target_id": group_id or user_id, "group_id": group_id, "last_alert_key": None})
+        msg = format_showtime_message(show_date, event_name) + "\n\n📸 ส่งรูป Showtime ใหม่เพื่ออัปเดต หรือพิมพ์เวลาเพื่อเพิ่มรายการ"
         line_bot_api.reply_message(reply_token, [TextSendMessage(text=msg), build_showtime_menu_flex(show_date)])
         return
 
@@ -1031,7 +1083,8 @@ def handle_text(event):
     # --- BLOCK 3: Enhanced Expense Parsing ---
     # guard: ห้าม parse expense ขณะรอ input หรืออยู่ใน state อื่น
     SLIP_STATES = {"wait_slip_payer", "wait_slip_participants", "wait_expense_participants",
-                   "showtime_mode", "wait_showtime_date", "end_trip",
+                   "showtime_mode", "wait_showtime_event_name", "wait_showtime_date",
+                   "wait_end_showtime_event_index", "wait_end_showtime_confirm", "end_trip",
                    "edit_selection", "edit_amount", "stop_event", "export_history"}
     trip = get_active_trip(user_id, group_id)
     if trip and not (state and state.get("action") in SLIP_STATES):
@@ -1252,7 +1305,7 @@ def handle_image(event):
             showtime_list = extract_showtime(text_detected)
             if showtime_list:
                 if state.get("edit_mode"):
-                    existing = load_showtime()
+                    existing = load_showtime(state.get("event_name"))
                     schedule = existing.get("schedule", [])
                     for new_item in showtime_list:
                         found = False
@@ -1261,8 +1314,8 @@ def handle_image(event):
                         if not found: schedule.append(new_item)
                     existing["schedule"] = sort_showtime_by_time(schedule)
                     existing["last_updated"] = datetime.now().isoformat()
-                    save_showtime(existing)
-                    msg = "✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message()
+                    save_showtime(existing, state.get("event_name"))
+                    msg = "✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))
                 else:
                     state["showtime_temp"] = showtime_list
                     msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 ตารางชั่วคราว:\n"
@@ -1319,3 +1372,4 @@ def serve_static(filename):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5177))
     app.run(host="0.0.0.0", port=port, debug=True)
+
