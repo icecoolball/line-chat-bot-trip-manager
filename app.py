@@ -255,9 +255,9 @@ def sort_showtime_by_time(schedule):
 
 def format_showtime_message(show_date=None, event_name=None):
     showtime = load_showtime(event_name)
-    if not showtime.get("schedule"): return "ℹ️ ยังไม่มีข้อมูล Showtime"
-    sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
     date_header = f"📅 วันที่จัดแสดง: {show_date}\n" if show_date else ""
+    if not showtime.get("schedule"): return f"{date_header}ℹ️ ยังไม่มีข้อมูล Showtime"
+    sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
     msg = f"{date_header}📋 ตารางการแสดง:\n\n"
     for item in sorted_schedule:
         time_display = item.get('time', '-').replace('.', ':')
@@ -874,21 +874,39 @@ def handle_text(event):
                 line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบรูปแบบที่ถูกต้อง\nตัวอย่าง: 13:00-13:50 ROMANCE"))
             return
 
-        # รับ Showtime ผ่านข้อความ (Pattern: เวลา-เวลา ชื่อ)
+        # รับ Showtime ผ่านข้อความ (รองรับหลายบรรทัด)
         time_pattern_input = r'^(\d{1,2}[:.]\d{2})\s*[-โ€“]\s*(\d{1,2}[:.]\d{2})\s+(.+)$'
-        match = re.match(time_pattern_input, text)
-        if match:
-            time_input = f"{match.group(1)}-{match.group(2)}".replace('.', ':')
-            artist_input = match.group(3).strip()
-            if "showtime_temp" not in state: state["showtime_temp"] = []
-            found = False
-            for item in state["showtime_temp"]:
-                if item["time"] == time_input: item["artist"] = artist_input; found = True; break
-            if not found: state["showtime_temp"].append({"time": time_input, "artist": artist_input})
+        parsed_rows = []
+        for ln in text.splitlines():
+            line = ln.strip()
+            if not line:
+                continue
+            mline = re.match(time_pattern_input, line)
+            if not mline:
+                parsed_rows = []
+                break
+            parsed_rows.append({
+                "time": f"{mline.group(1)}-{mline.group(2)}".replace('.', ':'),
+                "artist": mline.group(3).strip()
+            })
+        if parsed_rows:
+            if "showtime_temp" not in state:
+                state["showtime_temp"] = []
+            for row in parsed_rows:
+                found = False
+                for item in state["showtime_temp"]:
+                    if item["time"] == row["time"]:
+                        item["artist"] = row["artist"]
+                        found = True
+                        break
+                if not found:
+                    state["showtime_temp"].append(row)
             state["showtime_temp"] = sort_showtime_by_time(state["showtime_temp"])
             set_state(user_id, state)
-            msg = f"✅ เพิ่ม Showtime: {time_input} | {artist_input}\n\n📋 ตารางชั่วคราว:\n"
-            for item in state["showtime_temp"]: msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
+            date_header = f"📅 วันที่จัดแสดง: {state.get('show_date')}\n" if state.get("show_date") else ""
+            msg = f"{date_header}✅ เพิ่ม/อัปเดต Showtime {len(parsed_rows)} รายการ\n\n📋 ตารางชั่วคราว:\n"
+            for item in state["showtime_temp"]:
+                msg += f"⏱️ {item['time']} | 🎤 {item['artist']}\n"
             msg += "\n👉 ส่งเพิ่มอีก หรือพิมพ์ 'save'"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
