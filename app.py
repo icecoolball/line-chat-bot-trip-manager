@@ -150,10 +150,10 @@ def build_showtime_menu_flex(show_date=None):
         )
     )
 
-def build_report_flex(title, subtitle, lines, alt_text="เธฃเธฒเธขเธเธฒเธ"):
+def build_report_flex(title, subtitle, lines, alt_text="รายงาน"):
     safe_lines = lines[:12]
     if len(lines) > 12:
-        safe_lines.append(f"...เธญเธตเธ {len(lines)-12} เธฃเธฒเธขเธเธฒเธฃ")
+        safe_lines.append(f"...อีก {len(lines)-12} รายการ")
     body_contents = [
         TextComponent(text=title, weight='bold', size='xl', wrap=True),
     ]
@@ -226,10 +226,10 @@ def delete_showtime_event(event_name):
 def build_showtime_event_list_message():
     events = list_showtime_events()
     if not events:
-        return "เธขเธฑเธเนเธกเนเธกเธตเธ•เธฒเธฃเธฒเธ Showtime เนเธเธฃเธฐเธเธ"
-    msg = "เธ•เธฒเธฃเธฒเธ Showtime เธ—เธตเนเธกเธตเธญเธขเธนเน:\n"
+        return "ยังไม่มีตาราง Showtime ในระบบ"
+    msg = "ตาราง Showtime ที่มีอยู่:\n"
     for i, ev in enumerate(events, 1):
-        msg += f"{i}. {ev['event_name']} ({ev['count']} เธงเธ)\n"
+        msg += f"{i}. {ev['event_name']} ({ev['count']} วง)\n"
     return msg
 
 def sort_showtime_by_time(schedule):
@@ -243,10 +243,10 @@ def sort_showtime_by_time(schedule):
 
 def format_showtime_message(show_date=None, event_name=None):
     showtime = load_showtime(event_name)
-    if not showtime.get("schedule"): return "โน๏ธ เธขเธฑเธเนเธกเนเธกเธตเธเนเธญเธกเธนเธฅ Showtime"
+    if not showtime.get("schedule"): return "ℹ️ ยังไม่มีข้อมูล Showtime"
     sorted_schedule = sort_showtime_by_time(showtime.get("schedule", []))
-    date_header = f"๐“… เธงเธฑเธเธ—เธตเนเธเธฑเธ”เนเธชเธ”เธ: {show_date}\n" if show_date else ""
-    msg = f"{date_header}๐“ เธ•เธฒเธฃเธฒเธเธเธฒเธฃเนเธชเธ”เธ:\n\n"
+    date_header = f"📅 วันที่จัดแสดง: {show_date}\n" if show_date else ""
+    msg = f"{date_header}📋 ตารางการแสดง:\n\n"
     for item in sorted_schedule:
         time_display = item.get('time', '-').replace('.', ':')
         artist = item.get('artist', '-')
@@ -285,10 +285,10 @@ def get_exchange_rate(from_curr, to_curr):
 
 _CURRENCY_ALIASES = {
     "THB": "THB", "JPY": "JPY", "USD": "USD", "KRW": "KRW",
-    "เธเธฒเธ—": "THB", "baht": "THB",
-    "เน€เธขเธ": "JPY", "yen": "JPY",
-    "เธงเธญเธ": "KRW", "won": "KRW",
-    "เธ”เธญเธฅเธฅเธฒเธฃเน": "USD", "เธ”เธญเธฅเธฅเธฒเธฃเนเธชเธซเธฃเธฑเธ": "USD", "usd": "USD",
+    "บาท": "THB", "baht": "THB",
+    "เยน": "JPY", "yen": "JPY",
+    "วอน": "KRW", "won": "KRW",
+    "ดอลลาร์": "USD", "ดอลลาร์สหรัฐ": "USD", "usd": "USD",
 }
 
 def _normalize_currency(token):
@@ -351,14 +351,14 @@ def parse_enhanced_expense(text, default_payer_name=None):
         item = None
 
     if not payer: return None, None, None, None, None, None
-    if not item: item = "เธเนเธฒเนเธเนเธเนเธฒเธข"
+    if not item: item = "ค่าใช้จ่าย"
 
     return payer, item, amt_val, currency, tag, participants
 
 def extract_amount(text):
     if not text: return None
     lines = text.split('\n')
-    amount_labels = ['เธเธณเธเธงเธ', 'amount']
+    amount_labels = ['จำนวน', 'amount']
     for i, line in enumerate(lines):
         line_lower = line.lower().strip()
         if any(label in line_lower for label in amount_labels):
@@ -376,7 +376,7 @@ def extract_amount(text):
                     num = float(a.replace(',', ''))
                     if 1 <= num <= 1000000: return num
                 except: continue
-    baht_matches = re.findall(r'(\d{1,3}(?:,\d{3})(?:\.\d{1,2})?)\sเธเธฒเธ—', text)
+    baht_matches = re.findall(r'(\d{1,3}(?:,\d{3})(?:\.\d{1,2})?)\sบาท', text)
     for a in baht_matches:
         try:
             num = float(a.replace(',', ''))
@@ -385,7 +385,7 @@ def extract_amount(text):
     return None
 
 def _to_thai_date_str(iso_str):
-    """เนเธเธฅเธ ISO string (UTC) โ’ เธงเธฑเธเธ—เธตเนเนเธ—เธข (UTC+7) format YYYY-MM-DD"""
+    """แปลง ISO string (UTC) → วันที่ไทย (UTC+7) format YYYY-MM-DD"""
     if not iso_str:
         return ""
     try:
@@ -399,7 +399,7 @@ def extract_showtime(text):
     if not text: return []
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     showtime_list = []
-    # เนเธเนเนเธ: เธฅเธเธเนเธญเธเธงเนเธฒเธเนเธ {1,2} เนเธฅเธฐเธขเนเธฒเธข - เนเธเธ—เนเธฒเธขเธชเธธเธ”เนเธ character class
+    # แก้ไข: ลบช่องว่างใน {1,2} และย้าย - ไปท้ายสุดใน character class
     time_pattern = r'(\d{1,2}[:.]\d{2})\s*[-โ€“]\s*(\d{1,2}[:.]\d{2})'
     for i, line in enumerate(lines):
         time_match = re.search(time_pattern, line)
@@ -504,7 +504,7 @@ def get_active_events():
 def export_trip_to_excel(trip_id, trip_title):
     try:
         expenses = get_all_expenses(trip_id)
-        if not expenses: return None, "เนเธกเนเธกเธตเธเนเธญเธกเธนเธฅเธเนเธฒเนเธเนเธเนเธฒเธขเนเธเธ—เธฃเธดเธเธเธตเน"
+        if not expenses: return None, "ไม่มีข้อมูลค่าใช้จ่ายในทริปนี้"
         data = []
         for exp in expenses:
             user_name = exp.get('payer_name') or get_display_name(exp['line_user_id'], None)
@@ -519,10 +519,10 @@ def export_trip_to_excel(trip_id, trip_title):
             ppl = exp.get('participants') or []
             if isinstance(ppl, str): ppl = [p.strip() for p in ppl.split() if p.strip()]
             data.append({
-                "เธเธทเนเธญเธ—เธฃเธดเธ": trip_title, "เธงเธฑเธเธ—เธตเน": date_str, "เน€เธงเธฅเธฒ": time_str,
-                "เธเธทเนเธญเธเธนเนเธเนเธฒเธข": user_name, "เธฃเธฒเธขเธเธฒเธฃ": exp.get('item_name', ''),
-                "เธเธณเธเธงเธเน€เธเธดเธ": exp.get('amount', 0), "เธชเธเธธเธฅ": exp.get('currency', 'THB'),
-                "เธซเธกเธงเธ”เธซเธกเธนเน": exp.get('tag', ''), "เธซเธฒเธฃ": " ".join(ppl),
+                "ชื่อทริป": trip_title, "วันที่": date_str, "เวลา": time_str,
+                "ชื่อผู้จ่าย": user_name, "รายการ": exp.get('item_name', ''),
+                "จำนวนเงิน": exp.get('amount', 0), "สกุล": exp.get('currency', 'THB'),
+                "หมวดหมู่": exp.get('tag', ''), "หาร": " ".join(ppl),
             })
         df = pd.DataFrame(data)
         output = BytesIO()
@@ -544,11 +544,11 @@ def upload_excel_to_supabase(file_buffer, filename):
 @app.route("/api/event-time", methods=["GET"])
 def get_event_time():
     url = request.args.get("url", "")
-    if not url: return jsonify({"ok": False, "error": "เนเธกเนเธกเธต URL"}), 400
+    if not url: return jsonify({"ok": False, "error": "ไม่มี URL"}), 400
     try:
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         patterns = [
-            r'(\d{1,2})\s+(เธกเธเธฃเธฒเธเธก|เธเธธเธกเธ เธฒเธเธฑเธเธเน|เธกเธตเธเธฒเธเธก|เน€เธกเธฉเธฒเธขเธ|เธเธคเธฉเธ เธฒเธเธก|เธกเธดเธ–เธธเธเธฒเธขเธ|เธเธฃเธเธเธฒเธเธก|เธชเธดเธเธซเธฒเธเธก|เธเธฑเธเธขเธฒเธขเธ|เธ•เธธเธฅเธฒเธเธก|เธเธคเธจเธเธดเธเธฒเธขเธ|เธเธฑเธเธงเธฒเธเธก)\s+(\d{3,4})',
+            r'(\d{1,2})\s+(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s+(\d{3,4})',
             r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})'
         ]
         matched = ""
@@ -562,7 +562,7 @@ def get_event_time():
 def line_push():
     data = request.json
     target_id, message = data.get("targetId"), data.get("message")
-    if not target_id or not message: return jsonify({"ok": False, "error": "เธ•เนเธญเธเธฃเธฐเธเธธ targetId เนเธฅเธฐ message"}), 400
+    if not target_id or not message: return jsonify({"ok": False, "error": "ต้องระบุ targetId และ message"}), 400
     try:
         line_bot_api.push_message(target_id, TextSendMessage(text=message))
         return jsonify({"ok": True})
@@ -646,7 +646,7 @@ def check_showtime_cron():
                 if now.date() > end_dt.date():
                     target = st.get("target_id") or uid
                     clear_state(uid)
-                    try: line_bot_api.push_message(target, TextSendMessage(text="๐‘ Auto-End: Showtime เธซเธกเธ”เธงเธฑเธเธ—เธตเนเธ•เธฑเนเธเนเธงเนเนเธฅเนเธง"))
+                    try: line_bot_api.push_message(target, TextSendMessage(text="🛑 Auto-End: Showtime หมดวันที่ตั้งไว้แล้ว"))
                     except Exception as e: logger.error(f"Auto-end push error: {e}")
                     ended += 1; continue
             except: pass
@@ -696,7 +696,7 @@ def daily_summary_cron():
                     amt_thb *= (rate or 1.0)
                 total_thb += amt_thb
 
-                tag = exp.get('tag') or '#เธ—เธฑเนเธงเนเธ'
+                tag = exp.get('tag') or '#ทั่วไป'
                 if tag not in categories: categories[tag] = {'total_thb': 0.0, 'participants': set()}
                 categories[tag]['total_thb'] += amt_thb
 
@@ -708,14 +708,14 @@ def daily_summary_cron():
                 for p in ppl:
                     if p: categories[tag]['participants'].add(str(p))
 
-            msg = f"๐“ เธชเธฃเธธเธเธขเธญเธ”เธเธฃเธฐเธเธณเธงเธฑเธ ({today_str})\n๐€ เธ—เธฃเธดเธ: {trip['title']}\n\n"
+            msg = f"📊 สรุปยอดประจำวัน ({today_str})\n🚀 ทริป: {trip['title']}\n\n"
             if currency_totals:
                 cur_lines = [f"{c} {float(v):,.2f}" for c, v in sorted(currency_totals.items())]
-                msg += "๐’ฑ เธขเธญเธ”เธ•เธฒเธกเธชเธเธธเธฅ: " + " | ".join(cur_lines) + "\n"
-            msg += f"๐’ต เธขเธญเธ”เธฃเธงเธกเธงเธฑเธเธเธตเน (THB): {total_thb:,.2f} เธเธฒเธ—\n\n"
+                msg += "💱 ยอดตามสกุล: " + " | ".join(cur_lines) + "\n"
+            msg += f"💵 ยอดรวมวันนี้ (THB): {total_thb:,.2f} บาท\n\n"
             for tag, data in sorted(categories.items()):
                 ppl_str = " ".join(sorted(data['participants']))
-                msg += f"{tag} {data['total_thb']:,.0f} เธ. ({ppl_str})\n"
+                msg += f"{tag} {data['total_thb']:,.0f} บ. ({ppl_str})\n"
 
             target = trip.get('line_group_id') or trip.get('creator_id')
             if target:
@@ -759,18 +759,18 @@ def handle_text(event):
     # --- Follow-up states for Slip ---
     if state and state.get("action") == "wait_slip_payer":
         payer_name = text
-        if payer_name in ["เธเธฑเธ", "เธเธฑเธเน€เธญเธ", "me"]: payer_name = get_display_name(user_id, state.get('group_id'))
+        if payer_name in ["ฉัน", "ฉันเอง", "me"]: payer_name = get_display_name(user_id, state.get('group_id'))
         set_state(user_id, {"action": "wait_slip_participants", "message_id": state["message_id"], "trip_id": state["trip_id"], "group_id": state.get("group_id"), "payer_name": payer_name})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=" เธซเธฒเธฃเธเธฑเธเนเธเธฃเธเนเธฒเธ?\nเธเธดเธกเธเนเธเธทเนเธญเธเธฑเนเธเธ”เนเธงเธขเน€เธงเนเธเธงเธฃเธฃเธ เน€เธเนเธ: เธเธญเธฅ เธเธฒเธ เน€เธญเนเธก"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=" หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
         return
 
     if state and state.get("action") == "wait_slip_participants":
         names = [n.strip() for n in text.split() if n.strip()]
         if not names:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธเธฃเธธเธ“เธฒเธเธดเธกเธเนเธฃเธฒเธขเธเธทเนเธญเธญเธขเนเธฒเธเธเนเธญเธข 1 เธเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์รายชื่ออย่างน้อย 1 คน"))
             return
         my_name = get_display_name(user_id, state.get('group_id'))
-        names = [my_name if n in ["เธเธฑเธ", "เธเธฑเธเน€เธญเธ", "me"] else n for n in names]
+        names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
         payer_name = state.get("payer_name")
         threading.Thread(target=process_slip_with_payer, args=(state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, names)).start()
         clear_state(user_id)
@@ -780,17 +780,17 @@ def handle_text(event):
     if state and state.get("action") == "wait_expense_participants":
         names = [n.strip() for n in text.split() if n.strip()]
         if not names:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธเธฃเธธเธ“เธฒเธเธดเธกเธเนเธฃเธฒเธขเธเธทเนเธญเธญเธขเนเธฒเธเธเนเธญเธข 1 เธเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์รายชื่ออย่างน้อย 1 คน"))
             return
         my_name = get_display_name(user_id, state.get("group_id"))
-        names = [my_name if n in ["เธเธฑเธ", "เธเธฑเธเน€เธญเธ", "me"] else n for n in names]
+        names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
         if not supabase: return
         try:
             supabase.table("expenses").insert({"trip_id": state["trip_id"], "line_user_id": user_id, "payer_name": state["payer_name"], "amount": state["amount"], "item_name": state["item"], "currency": state["currency"], "tag": state["tag"], "participants": names, "slip_url": None}).execute()
             curr_txt = f" {state['currency']}" if state['currency'] != "THB" else ""
             tag_txt = f" ({state['tag']})" if state['tag'] else ""
             ppl_txt = " ".join(names)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ… เธเธฑเธเธ—เธถเธ {state['amount']:,.2f}{curr_txt}{tag_txt}\nเธเนเธฒเธข: {state['payer_name']}\nเธซเธฒเธฃ: {ppl_txt}"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {state['amount']:,.2f}{curr_txt}{tag_txt}\nจ่าย: {state['payer_name']}\nหาร: {ppl_txt}"))
         except Exception as e: logger.error(f"Save expense error: {e}")
         clear_state(user_id)
         return
@@ -814,24 +814,24 @@ def handle_text(event):
         if text_lower in ["end showtime", "stop showtime"]:
             events = list_showtime_events()
             if not events:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธต event เนเธเธฃเธฐเธเธเนเธซเนเธฅเธ"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี event ในระบบให้ลบ"))
                 return
-            msg = "๐—‘๏ธ เน€เธฅเธทเธญเธ event เธ—เธตเนเธ•เนเธญเธเธเธฒเธฃเธฅเธ:\n"
+            msg = "🗑️ เลือก event ที่ต้องการลบ:\n"
             for i, ev in enumerate(events, 1):
-                msg += f"{i}. ๐ช {ev['event_name']} ({ev['count']} เธงเธ)\n"
-            msg += "\nเธเธดเธกเธเน 'end showtime [เน€เธฅเธ]' เน€เธเนเธ end showtime 1\nเธซเธฃเธทเธญ 'exit' เน€เธเธทเนเธญเธญเธญเธเธเธฒเธเนเธซเธกเธ”"
+                msg += f"{i}. 🎪 {ev['event_name']} ({ev['count']} วง)\n"
+            msg += "\nพิมพ์ 'end showtime [เลข]' เช่น end showtime 1\nหรือ 'exit' เพื่อออกจากโหมด"
             set_state(user_id, {"action": "wait_end_showtime_event_index", "events": events, "target_id": group_id or user_id, "group_id": group_id})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
 
-        # --- menu/help/exit เธ•เนเธญเธ bypass เธ—เธธเธ state เนเธ showtime_mode (เธฃเธงเธก edit_mode) ---
-        if text in ["เน€เธกเธเธน", "menu", "help"]:
+        # --- menu/help/exit ต้อง bypass ทุก state ใน showtime_mode (รวม edit_mode) ---
+        if text in ["เมนู", "menu", "help"]:
             line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("show_date")))
             return
 
-        if text_lower in ["exit", "เธญเธญเธ"]:
+        if text_lower in ["exit", "ออก"]:
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ… เธญเธญเธเธเธฒเธเนเธซเธกเธ” Showtime เน€เธฃเธตเธขเธเธฃเนเธญเธข\n๐“ธ เธเธฅเธฑเธเธกเธฒเธฃเธฑเธเธชเธฅเธดเธเธเธเธ•เธดเนเธฅเนเธงเธเธฃเธฑเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมด Showtime เรียบร้อย\n📸 กลับมารับสลิปปกติแล้วครับ"))
             return
 
         if state.get("edit_mode"):
@@ -857,12 +857,12 @@ def handle_text(event):
                 existing["schedule"] = sort_showtime_by_time(schedule)
                 existing["last_updated"] = datetime.now().isoformat()
                 save_showtime(existing, event_name)
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="โ… เธญเธฑเธเน€เธ”เธ• Showtime เน€เธชเธฃเนเธ!\n\n" + format_showtime_message(state.get("show_date"), event_name) + "\n\nเธเธดเธกเธเน 'save' เน€เธเธทเนเธญเธเธ"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message(state.get("show_date"), event_name) + "\n\nพิมพ์ 'save' เพื่อจบ"))
             else:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธเธเธฃเธนเธเนเธเธเธ—เธตเนเธ–เธนเธเธ•เนเธญเธ\nเธ•เธฑเธงเธญเธขเนเธฒเธ: 13:00-13:50 ROMANCE"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบรูปแบบที่ถูกต้อง\nตัวอย่าง: 13:00-13:50 ROMANCE"))
             return
 
-        # เธฃเธฑเธ Showtime เธเนเธฒเธเธเนเธญเธเธงเธฒเธก (Pattern: เน€เธงเธฅเธฒ-เน€เธงเธฅเธฒ เธเธทเนเธญ)
+        # รับ Showtime ผ่านข้อความ (Pattern: เวลา-เวลา ชื่อ)
         time_pattern_input = r'^(\d{1,2}[:.]\d{2})\s*[-โ€“]\s*(\d{1,2}[:.]\d{2})\s+(.+)$'
         match = re.match(time_pattern_input, text)
         if match:
@@ -875,9 +875,9 @@ def handle_text(event):
             if not found: state["showtime_temp"].append({"time": time_input, "artist": artist_input})
             state["showtime_temp"] = sort_showtime_by_time(state["showtime_temp"])
             set_state(user_id, state)
-            msg = f"โ… เน€เธเธดเนเธก Showtime: {time_input} | {artist_input}\n\n๐“ เธ•เธฒเธฃเธฒเธเธเธฑเนเธงเธเธฃเธฒเธง:\n"
+            msg = f"✅ เพิ่ม Showtime: {time_input} | {artist_input}\n\n📋 ตารางชั่วคราว:\n"
             for item in state["showtime_temp"]: msg += f"โฑ๏ธ {item['time']} | ๐ค {item['artist']}\n"
-            msg += "\n๐‘ เธชเนเธเน€เธเธดเนเธกเธญเธตเธ เธซเธฃเธทเธญเธเธดเธกเธเน 'save'"
+            msg += "\n👉 ส่งเพิ่มอีก หรือพิมพ์ 'save'"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
 
@@ -886,33 +886,33 @@ def handle_text(event):
             return
         if text_lower in ["editshowtime", "update showtime"]:
             set_state(user_id, {**state, "edit_mode": True})
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ๏ธ เนเธเนเนเธ Showtime\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✏️ แก้ไข Showtime\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))))
             return
 
         allowed = ["save", "showtime", "editshowtime", "update showtime", "เมนู", "menu", "help", "ยกเลิก", "cancel", "end showtime", "exit", "ออก"]
         if re.match(r'^end showtime\s+\d+$', text_lower): allowed.append(text_lower)
         if text_lower not in allowed and text not in allowed:
             if not re.match(time_pattern_input, text):
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="๐”’ เธ•เธญเธเธเธตเนเธญเธขเธนเนเนเธเนเธซเธกเธ” Showtime\nเธเธดเธกเธเน 'menu' เน€เธเธทเนเธญเธ”เธนเธเธณเธชเธฑเนเธ เธซเธฃเธทเธญเธชเนเธ: 22:00-23:00 เธเธทเนเธญเธงเธ"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="🔒 ตอนนี้อยู่ในโหมด Showtime\nพิมพ์ 'menu' เพื่อดูคำสั่ง หรือส่ง: 22:00-23:00 ชื่อวง"))
             return
 
     if state and state.get("action") == "wait_end_showtime_event_index":
-        if text_lower in ["exit", "เธญเธญเธ"]:
+        if text_lower in ["exit", "ออก"]:
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ… เธญเธญเธเธเธฒเธเนเธซเธกเธ”เธฅเธ event เนเธฅเนเธง"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ออกจากโหมดลบ event แล้ว"))
             return
         m = re.match(r"^end\s+showtime\s+(\d+)$", text_lower)
         if not m:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="เธเธดเธกเธเน 'end showtime [เน€เธฅเธ]' เธซเธฃเธทเธญ 'exit'"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'end showtime [เลข]' หรือ 'exit'"))
             return
         events = state.get("events", [])
         idx = int(m.group(1))
         if idx < 1 or idx > len(events):
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ ๏ธ เน€เธฅเธเนเธกเนเธ–เธนเธเธ•เนเธญเธ (1-{len(events)})"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ เลขไม่ถูกต้อง (1-{len(events)})"))
             return
         selected = events[idx - 1]
         set_state(user_id, {"action": "wait_end_showtime_confirm", "event_name": selected["event_name"]})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"เธขเธทเธเธขเธฑเธเธฅเธ event '{selected['event_name']}' เธ—เธฑเนเธเธซเธกเธ”?\nเธเธดเธกเธเน 'yes' เน€เธเธทเนเธญเธขเธทเธเธขเธฑเธ เธซเธฃเธทเธญ 'exit' เน€เธเธทเนเธญเธขเธเน€เธฅเธดเธ"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ยืนยันลบ event '{selected['event_name']}' ทั้งหมด?\nพิมพ์ 'yes' เพื่อยืนยัน หรือ 'exit' เพื่อยกเลิก"))
         return
 
     if state and state.get("action") == "wait_end_showtime_confirm":
@@ -920,13 +920,13 @@ def handle_text(event):
             event_name = state.get("event_name")
             ok = delete_showtime_event(event_name)
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ… เธฅเธ event '{event_name}' เน€เธฃเธตเธขเธเธฃเนเธญเธข" if ok else "โ เธฅเธ event เนเธกเนเธชเธณเน€เธฃเนเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ ลบ event '{event_name}' เรียบร้อย" if ok else "❌ ลบ event ไม่สำเร็จ"))
             return
-        if text_lower in ["exit", "เธญเธญเธ"]:
+        if text_lower in ["exit", "ออก"]:
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ… เธขเธเน€เธฅเธดเธเธเธฒเธฃเธฅเธ event เนเธฅเนเธง"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกการลบ event แล้ว"))
             return
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="เธเธดเธกเธเน 'yes' เน€เธเธทเนเธญเธขเธทเธเธขเธฑเธ เธซเธฃเธทเธญ 'exit' เน€เธเธทเนเธญเธขเธเน€เธฅเธดเธ"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'yes' เพื่อยืนยัน หรือ 'exit' เพื่อยกเลิก"))
         return
 
     # --- Entry: Start Showtime ---
@@ -934,12 +934,12 @@ def handle_text(event):
         events = list_showtime_events()
         if events:
             msg = build_showtime_event_list_message()
-            msg += "\n\nเธเธดเธกเธเน 'เน€เธเธดเนเธก' เน€เธเธทเนเธญเน€เธเธดเนเธกเธ•เธฒเธฃเธฒเธเนเธซเธกเน\nเธซเธฃเธทเธญเธเธดเธกเธเน 'showtime [เน€เธฅเธ]' เน€เธเธทเนเธญเธ”เธนเธ•เธฒเธฃเธฒเธเน€เธ”เธดเธก"
+            msg += "\n\nพิมพ์ 'เพิ่ม' เพื่อเพิ่มตารางใหม่\nหรือพิมพ์ 'showtime [เลข]' เพื่อดูตารางเดิม"
             set_state(user_id, {"action": "wait_showtime_add_confirm", "events": events})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
         set_state(user_id, {"action": "wait_showtime_event_name"})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="เธเธฃเธธเธ“เธฒเธฃเธฐเธเธธเธเธทเนเธญ Showtime/Event\nเน€เธเนเธ Big Mountain 2026"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="กรุณาระบุชื่อ Showtime/Event\nเช่น Big Mountain 2026"))
         return
 
     if state and state.get("action") == "wait_showtime_add_confirm":
@@ -948,25 +948,25 @@ def handle_text(event):
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="? ยกเลิกโหมด Showtime แล้ว"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมด Showtime แล้ว"))
             return
         events = state.get("events", [])
-        if text_lower in ["เน€เธเธดเนเธก", "add", "yes", "y"]:
+        if text_lower in ["เพิ่ม", "add", "yes", "y"]:
             set_state(user_id, {"action": "wait_showtime_event_name"})
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="เธเธฃเธธเธ“เธฒเธฃเธฐเธเธธเธเธทเนเธญ Showtime/Event"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="กรุณาระบุชื่อ Showtime/Event"))
             return
         m = re.match(r"^showtime\\s+(\\d+)$", text_lower)
         if m:
             idx = int(m.group(1))
             if idx < 1 or idx > len(events):
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"เน€เธฅเธเนเธกเนเธ–เธนเธเธ•เนเธญเธ (1-{len(events)})"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"เลขไม่ถูกต้อง (1-{len(events)})"))
                 return
             selected = events[idx - 1]
             msg = format_showtime_message(None, selected["event_name"])
-            msg += "\n\nเธเธดเธกเธเน 'เน€เธเธดเนเธก' เธ–เนเธฒเธ•เนเธญเธเธเธฒเธฃเน€เธเธดเนเธกเธ•เธฒเธฃเธฒเธเนเธซเธกเน"
+            msg += "\n\nพิมพ์ 'เพิ่ม' ถ้าต้องการเพิ่มตารางใหม่"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             return
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="เธเธดเธกเธเน 'เน€เธเธดเนเธก' เธซเธฃเธทเธญ 'showtime [เน€เธฅเธ]'"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="พิมพ์ 'เพิ่ม' หรือ 'showtime [เลข]'"))
         return
 
     if state and state.get("action") == "wait_showtime_event_name":
@@ -975,14 +975,14 @@ def handle_text(event):
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="? ยกเลิกโหมด Showtime แล้ว"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมด Showtime แล้ว"))
             return
         event_name = text.strip()
         if not event_name:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธเธทเนเธญ event เธซเนเธฒเธกเธงเนเธฒเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ชื่อ event ห้ามว่าง"))
             return
         set_state(user_id, {"action": "wait_showtime_date", "event_name": event_name})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="๐“… เธเธฃเธธเธ“เธฒเธฃเธฐเธเธธเธงเธฑเธเธ—เธตเนเธเธฑเธ”เนเธชเธ”เธ (YYYY-MM-DD)\nเน€เธเนเธ 2026-05-30\n(เธเธดเธกเธเน 'เธเนเธฒเธก' เธซเธฒเธเนเธกเนเธ•เนเธญเธเธเธฒเธฃเธเธณเธซเธเธ”)"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="📅 กรุณาระบุวันที่จัดแสดง (YYYY-MM-DD)\nเช่น 2026-05-30\n(พิมพ์ 'ข้าม' หากไม่ต้องการกำหนด)"))
         return
 
     if state and state.get("action") == "wait_showtime_date":
@@ -991,19 +991,19 @@ def handle_text(event):
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="? ยกเลิกโหมด Showtime แล้ว"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกโหมด Showtime แล้ว"))
             return
         show_date = None
-        if text_lower != "เธเนเธฒเธก" and text_lower != "skip":
+        if text_lower != "ข้าม" and text_lower != "skip":
             try:
                 parsed = datetime.strptime(text.strip(), "%Y-%m-%d")
                 show_date = parsed.strftime("%Y-%m-%d")
             except ValueError:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธฃเธนเธเนเธเธเธงเธฑเธเธ—เธตเนเนเธกเนเธ–เธนเธเธ•เนเธญเธ เนเธเน YYYY-MM-DD เธซเธฃเธทเธญเธเธดเธกเธเน 'เธเนเธฒเธก'"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ รูปแบบวันที่ไม่ถูกต้อง ใช้ YYYY-MM-DD หรือพิมพ์ 'ข้าม'"))
                 return
         event_name = state.get("event_name")
         set_state(user_id, {"action": "showtime_mode", "event_name": event_name, "show_date": show_date, "end_date": show_date, "edit_mode": False, "target_id": group_id or user_id, "group_id": group_id, "last_alert_key": None})
-        msg = format_showtime_message(show_date, event_name) + "\n\nเธชเนเธเธฃเธนเธเธซเธฃเธทเธญเธเธดเธกเธเนเธ•เธฒเธฃเธฒเธเนเธชเธ”เธ เนเธฅเนเธงเธเธดเธกเธเน 'save' เน€เธเธทเนเธญเธเธฑเธเธ—เธถเธ"
+        msg = format_showtime_message(show_date, event_name) + "\n\nส่งรูปหรือพิมพ์ตารางแสดง แล้วพิมพ์ 'save' เพื่อบันทึก"
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
@@ -1015,13 +1015,13 @@ def handle_text(event):
     if text in ["ยกเลิก", "cancel"]:
         if state:
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ… เธขเธเน€เธฅเธดเธเน€เธฃเธตเธขเธเธฃเนเธญเธข"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกเรียบร้อย"))
         return
 
     if text_lower.startswith("edit"):
         trip = get_active_trip(user_id, group_id)
         if not trip:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธตเธ—เธฃเธดเธเธ—เธตเนเธเธณเธฅเธฑเธเธ—เธณเธเธฒเธเธญเธขเธนเน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         edit_parts = text_lower.split()
         if len(edit_parts) == 3 and edit_parts[0] == "edit":
@@ -1031,31 +1031,31 @@ def handle_text(event):
                     expenses = get_all_expenses(trip['id'])
                     selected = next((e for e in expenses if e['id'] == inline_id), None)
                     if selected and update_expense_amount(inline_id, inline_amount):
-                        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ… เนเธเนเนเธเธฃเธฒเธขเธเธฒเธฃ ID {inline_id:04d} เน€เธเนเธ {inline_amount:,.2f} เธเธฒเธ— เน€เธฃเธตเธขเธเธฃเนเธญเธข!"))
-                    else: line_bot_api.reply_message(reply_token, TextSendMessage(text="โ เนเธเนเนเธเนเธกเนเธชเธณเน€เธฃเนเธ"))
+                        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ แก้ไขรายการ ID {inline_id:04d} เป็น {inline_amount:,.2f} บาท เรียบร้อย!"))
+                    else: line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ แก้ไขไม่สำเร็จ"))
                 return
             except: pass
         expenses = get_all_expenses(trip['id'])
         if not expenses:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธตเธฃเธฒเธขเธเธฒเธฃเธเนเธฒเนเธเนเธเนเธฒเธขเนเธซเนเนเธเนเนเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีรายการค่าใช้จ่ายให้แก้ไข"))
             return
-        lines_edit = [f"ID {exp['id']:04d} | {exp['item_name'][:30]} | {exp['amount']:,.2f} เธเธฒเธ—" for exp in expenses]
-        line_bot_api.reply_message(reply_token, build_report_flex(title="โ๏ธ เน€เธฅเธทเธญเธเธฃเธฒเธขเธเธฒเธฃเนเธเนเนเธ", subtitle="เธเธดเธกเธเน: edit [ID] [เธขเธญเธ”เนเธซเธกเน]", lines=lines_edit, alt_text="เนเธเนเนเธเธฃเธฒเธขเธเธฒเธฃ"))
+        lines_edit = [f"ID {exp['id']:04d} | {exp['item_name'][:30]} | {exp['amount']:,.2f} บาท" for exp in expenses]
+        line_bot_api.reply_message(reply_token, build_report_flex(title="✏️ เลือกรายการแก้ไข", subtitle="พิมพ์: edit [ID] [ยอดใหม่]", lines=lines_edit, alt_text="แก้ไขรายการ"))
         return
 
-    if text.startswith("เธ—เธฃเธดเธ ") or text_lower.startswith("trip "):
-        trip_name = text[5:].strip() if text.startswith("เธ—เธฃเธดเธ ") else text[5:].strip()
+    if text.startswith("ทริป ") or text_lower.startswith("trip "):
+        trip_name = text[5:].strip() if text.startswith("ทริป ") else text[5:].strip()
         if not trip_name:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธเธฃเธธเธ“เธฒเธฃเธฐเธเธธเธเธทเนเธญเธ—เธฃเธดเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป"))
             return
         if not supabase: return
         try:
             supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
             supabase.table("trips").insert({"title": trip_name, "status": "active", "line_group_id": group_id, "creator_id": user_id}).execute()
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"๐€ เน€เธฃเธดเนเธกเธ—เธฃเธดเธเนเธซเธกเน: {trip_name} เน€เธฃเธตเธขเธเธฃเนเธญเธข!"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
         except Exception as e:
             logger.error(f"Create trip error: {e}")
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=" เธชเธฃเนเธฒเธเธ—เธฃเธดเธเนเธกเนเธชเธณเน€เธฃเนเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=" สร้างทริปไม่สำเร็จ"))
         return
 
     if text == "id":
@@ -1064,14 +1064,14 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
-    if text == "เธขเธญเธ”" or text_lower == "sum":
+    if text == "ยอด" or text_lower == "sum":
         trip = get_active_trip(user_id, group_id)
         if not trip:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธตเธ—เธฃเธดเธเธ—เธตเนเธเธณเธฅเธฑเธเธ—เธณเธเธฒเธเธญเธขเธนเน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         expenses = get_all_expenses(trip['id'])
         if not expenses:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=" เธขเธฑเธเนเธกเนเธกเธตเธฃเธฒเธขเธเธฒเธฃเธเนเธฒเนเธเนเธเนเธฒเธข"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=" ยังไม่มีรายการค่าใช้จ่าย"))
             return
         total_thb = 0
         categories = {}
@@ -1080,7 +1080,7 @@ def handle_text(event):
             curr = exp.get('currency', 'THB')
             if curr != 'THB': amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
             total_thb += amt_thb
-            tag = exp.get('tag') or '#เธ—เธฑเนเธงเนเธ'
+            tag = exp.get('tag') or '#ทั่วไป'
             if tag not in categories: categories[tag] = {'total': 0, 'participants': set()}
             categories[tag]['total'] += amt_thb
             ppl = exp.get('participants') or []
@@ -1090,14 +1090,14 @@ def handle_text(event):
                 ppl = [payer]
             for p in ppl:
                 if p: categories[tag]['participants'].add(str(p))
-        lines = [f"เธขเธญเธ”เธฃเธงเธก {total_thb:,.2f} เธเธฒเธ—"]
+        lines = [f"ยอดรวม {total_thb:,.2f} บาท"]
         for tag, data in sorted(categories.items()):
             ppl_str = " ".join(sorted(data['participants']))
             lines.append(f"{tag} {data['total']:,.0f} {ppl_str}")
-        line_bot_api.reply_message(reply_token, build_report_flex(title="๐’ฐ เธขเธญเธ”เธฃเธงเธกเธ—เธฃเธดเธ", subtitle=None, lines=lines, alt_text="เธขเธญเธ”เธฃเธงเธก"))
+        line_bot_api.reply_message(reply_token, build_report_flex(title="💰 ยอดรวมทริป", subtitle=None, lines=lines, alt_text="ยอดรวม"))
         return
 
-    if text == "เธขเธญเธ”เธงเธฑเธเธเธตเน" or text_lower == "เธขเธญเธ”เธงเธฑเธเธเธตเน" or text_lower.startswith("เธขเธญเธ”เธงเธฑเธเธเธตเน "):
+    if text == "ยอดวันนี้" or text_lower == "ยอดวันนี้" or text_lower.startswith("ยอดวันนี้ "):
         parts = text.split()
         target_curr = "THB"
         if len(parts) > 1:
@@ -1106,12 +1106,12 @@ def handle_text(event):
         today_str = (datetime.now() + timedelta(hours=7)).strftime("%Y-%m-%d")
         trip = get_active_trip(user_id, group_id)
         if not trip:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธตเธ—เธฃเธดเธเธ—เธตเนเธเธณเธฅเธฑเธเธ—เธณเธเธฒเธเธญเธขเธนเน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         expenses = get_all_expenses(trip['id'])
         today_exp = [e for e in expenses if _to_thai_date_str(e.get('created_at', '')) == today_str]
         if not today_exp:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โน๏ธ เธงเธฑเธเธเธตเน ({today_str}) เธขเธฑเธเนเธกเนเธกเธตเธฃเธฒเธขเธเนเธฒเธข"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"ℹ️ วันนี้ ({today_str}) ยังไม่มีรายจ่าย"))
             return
         total_thb = 0
         categories = {}
@@ -1122,7 +1122,7 @@ def handle_text(event):
             amt_thb = exp['amount']
             if curr != 'THB': amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
             total_thb += amt_thb
-            tag = exp.get('tag') or '#เธ—เธฑเนเธงเนเธ'
+            tag = exp.get('tag') or '#ทั่วไป'
             if tag not in categories: categories[tag] = {'total_thb': 0, 'participants': set()}
             categories[tag]['total_thb'] += amt_thb
             ppl = exp.get('participants') or []
@@ -1137,23 +1137,23 @@ def handle_text(event):
         subtitle_parts = []
         if currency_totals:
             cur_lines = [f"{c} {float(v):,.2f}" for c, v in sorted(currency_totals.items())]
-            subtitle_parts.append("๐’ฑ เธขเธญเธ”เธ•เธฒเธกเธชเธเธธเธฅ: " + " | ".join(cur_lines))
+            subtitle_parts.append("💱 ยอดตามสกุล: " + " | ".join(cur_lines))
         if target_curr != "THB":
             subtitle_parts.append(f"1 THB = {rate_to_target:.4f} {target_curr}")
-            subtitle_parts.append(f" เธฃเธงเธกเธงเธฑเธเธเธตเน: {total_thb:,.2f} เธเธฒเธ— (โ {total_target:,.2f} {target_curr})")
+            subtitle_parts.append(f" รวมวันนี้: {total_thb:,.2f} บาท (≈ {total_target:,.2f} {target_curr})")
         else:
-            subtitle_parts.append(f"๐’ต เธฃเธงเธกเธงเธฑเธเธเธตเน: {total_thb:,.2f} เธเธฒเธ—")
+            subtitle_parts.append(f"💵 รวมวันนี้: {total_thb:,.2f} บาท")
         lines = []
         for tag, data in sorted(categories.items()):
             ppl_str = " ".join(sorted(data['participants']))
             line = f"{tag} {data['total_thb']:,.0f} {ppl_str}"
             if target_curr != "THB": line += f" (โ {data['total_thb'] * rate_to_target:,.2f} {target_curr})"
             lines.append(line)
-        line_bot_api.reply_message(reply_token, build_report_flex(title=f"๐“… เธขเธญเธ”เธงเธฑเธเธเธตเน ({today_str})", subtitle="\n".join(subtitle_parts), lines=lines, alt_text="เธขเธญเธ”เธงเธฑเธเธเธตเน"))
+        line_bot_api.reply_message(reply_token, build_report_flex(title=f"📅 ยอดวันนี้ ({today_str})", subtitle="\n".join(subtitle_parts), lines=lines, alt_text="ยอดวันนี้"))
         return
 
     # --- BLOCK 3: Enhanced Expense Parsing ---
-    # guard: เธซเนเธฒเธก parse expense เธเธ“เธฐเธฃเธญ input เธซเธฃเธทเธญเธญเธขเธนเนเนเธ state เธญเธทเนเธ
+    # guard: ห้าม parse expense ขณะรอ input หรืออยู่ใน state อื่น
     SLIP_STATES = {"wait_slip_payer", "wait_slip_participants", "wait_expense_participants",
                    "showtime_mode", "wait_showtime_add_confirm", "wait_showtime_event_name", "wait_showtime_date",
                    "wait_end_showtime_event_index", "wait_end_showtime_confirm", "end_trip",
@@ -1165,33 +1165,33 @@ def handle_text(event):
         if amount and amount > 0:
             if not participants:
                 set_state(user_id, {"action": "wait_expense_participants", "trip_id": trip['id'], "group_id": group_id, "payer_name": payer, "item": item, "amount": amount, "currency": currency, "tag": tag})
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="๐‘ฅ เธซเธฒเธฃเธเธฑเธเนเธเธฃเธเนเธฒเธ?\nเธเธดเธกเธเนเธเธทเนเธญเธเธฑเนเธเธ”เนเธงเธขเน€เธงเนเธเธงเธฃเธฃเธ เน€เธเนเธ: เธเธญเธฅ เธเธฒเธ เน€เธญเนเธก"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="👥 หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
                 return
             if not supabase: return
             try:
-                supabase.table("expenses").insert({"trip_id": trip['id'], "line_user_id": user_id, "payer_name": payer, "amount": amount, "item_name": item or "เธเนเธฒเนเธเนเธเนเธฒเธข", "currency": currency, "tag": tag, "participants": participants, "slip_url": None}).execute()
+                supabase.table("expenses").insert({"trip_id": trip['id'], "line_user_id": user_id, "payer_name": payer, "amount": amount, "item_name": item or "ค่าใช้จ่าย", "currency": currency, "tag": tag, "participants": participants, "slip_url": None}).execute()
                 curr_txt = f" {currency}" if currency != "THB" else ""
                 tag_txt = f" ({tag})" if tag else ""
                 ppl_txt = " ".join(participants or [])
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ… เธเธฑเธเธ—เธถเธ {amount:,.2f}{curr_txt}{tag_txt}\nเธเนเธฒเธข: {payer}\nเธซเธฒเธฃ: {ppl_txt}"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {amount:,.2f}{curr_txt}{tag_txt}\nจ่าย: {payer}\nหาร: {ppl_txt}"))
             except Exception as e: logger.error(f"Save expense error: {e}")
         return
 
     # --- Other Commands (End Trip, Excel, History, Event) ---
-    if text.startswith("เธเธเธ—เธฃเธดเธ ") or text_lower.startswith("end trip "):
+    if text.startswith("จบทริป ") or text_lower.startswith("end trip "):
         trip = get_active_trip(user_id, group_id)
         if not trip:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธตเธ—เธฃเธดเธเธ—เธตเนเธเธณเธฅเธฑเธเธ—เธณเธเธฒเธเธญเธขเธนเน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         currency_code = "THB"
-        if text.startswith("เธเธเธ—rip "):
+        if text.startswith("จบทrip "):
             parts = text.split()
             if len(parts) >= 2: currency_code = parts[1].upper()
         elif text_lower.startswith("end trip "):
             parts = text_lower.split()
             if len(parts) >= 3: currency_code = parts[2].upper()
         set_state(user_id, {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title'], "currency_code": currency_code})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"๐ เธเธดเธ”เธ—เธฃเธดเธ: {trip['title']}\n๐’ฑ เนเธเธฅเธเน€เธเนเธเธชเธเธธเธฅ: {currency_code}\n\n๐‘ฅ เธฃเธฐเธเธธเธเธณเธเธงเธเธเธเธ—เธตเนเธเธฐเธซเธฒเธฃ: "))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n💱 แปลงเป็นสกุล: {currency_code}\n\n👥 ระบุจำนวนคนที่จะหาร: "))
         return
 
     if state and state.get("action") == "end_trip":
@@ -1199,14 +1199,14 @@ def handle_text(event):
             num_people = int(text)
             if num_people <= 0: raise ValueError
         except:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธเธฃเธธเธ“เธฒเธฃเธฐเธเธธเธเธณเธเธงเธเธเธเน€เธเนเธเธ•เธฑเธงเน€เธฅเธเธ—เธตเนเธกเธฒเธเธเธงเนเธฒ 0"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุจำนวนคนเป็นตัวเลขที่มากกว่า 0"))
             return
         trip_id = state["trip_id"]
         trip_title = state["trip_title"]
         currency_code = state.get("currency_code", "THB")
         total_thb, paid_totals, share_totals, people = compute_trip_balances_thb(trip_id, group_id)
         if total_thb == 0:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"๐€ เธ—เธฃเธดเธ: {trip_title}\nโ ๏ธ เนเธกเนเธกเธตเธฃเธฒเธขเธเธฒเธฃเธเนเธฒเนเธเนเธเนเธฒเธขเนเธซเนเธซเธฒเธฃ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
             clear_state(user_id)
             return
         real_people = sorted(list(people)) if people else []
@@ -1217,25 +1217,25 @@ def handle_text(event):
             rate = get_exchange_rate("THB", currency_code)
             if rate: exchange_rate = rate
             else: currency_code = "THB"
-        msg = f"๐€ เธ—เธฃเธดเธ: {trip_title}\n๐‘ฅ เธเธณเธเธงเธเธเธ: {real_n}\n\n"
+        msg = f"🚀 ทริป: {trip_title}\n👥 จำนวนคน: {real_n}\n\n"
         if currency_code != "THB" and exchange_rate != 1:
-            msg += f"๐’ฑ เธญเธฑเธ•เธฃเธฒเนเธฅเธเน€เธเธฅเธตเนเธขเธ: 1 THB = {exchange_rate:.4f} {currency_code}\n\n"
-            msg += f"๐“ เธขเธญเธ”เธซเธฒเธฃเน€เธเธฅเธตเนเธข:\n   โ€ข {avg:,.2f} เธเธฒเธ—/เธเธ\n   โ€ข โ {avg * exchange_rate:,.2f} {currency_code}/เธเธ\n\n"
+            msg += f"💱 อัตราแลกเปลี่ยน: 1 THB = {exchange_rate:.4f} {currency_code}\n\n"
+            msg += f"📉 ยอดหารเฉลี่ย:\n   • {avg:,.2f} บาท/คน\n   • ≈ {avg * exchange_rate:,.2f} {currency_code}/คน\n\n"
         else:
-            msg += f"๐“ เธขเธญเธ”เธซเธฒเธฃเน€เธเธฅเธตเนเธข: {avg:,.2f} เธเธฒเธ—/เธเธ\n\n"
-        msg += "๐’ต เธขเธญเธ”เธชเธฃเธธเธเธชเธธเธ—เธเธด (เธเนเธฒเธขเน€เธเธดเนเธก/เธฃเธฑเธเธเธทเธ):\n"
+            msg += f"📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n\n"
+        msg += "💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
         for name in real_people:
             paid = paid_totals.get(name, 0.0)
             share = share_totals.get(name, 0.0)
             diff = paid - share
             if currency_code != "THB" and exchange_rate != 1:
-                if diff > 0: msg += f"โ€ข {name}: เธฃเธฑเธเธเธทเธ {diff:,.2f} เธเธฒเธ— (โ {diff * exchange_rate:,.2f} {currency_code})\n"
-                elif diff < 0: msg += f"โ€ข {name}: เธเนเธฒเธขเน€เธเธดเนเธก {abs(diff):,.2f} เธเธฒเธ— (โ {abs(diff) * exchange_rate:,.2f} {currency_code})\n"
-                else: msg += f"โ€ข {name}: เน€เธฃเธตเธขเธเธฃเนเธญเธขเนเธฅเนเธง\n"
+                if diff > 0: msg += f"• {name}: รับคืน {diff:,.2f} บาท (≈ {diff * exchange_rate:,.2f} {currency_code})\n"
+                elif diff < 0: msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท (≈ {abs(diff) * exchange_rate:,.2f} {currency_code})\n"
+                else: msg += f"• {name}: เรียบร้อยแล้ว\n"
             else:
-                if diff > 0: msg += f"โ€ข {name}: เธฃเธฑเธเธเธทเธ {diff:,.2f} เธเธฒเธ—\n"
-                elif diff < 0: msg += f"โ€ข {name}: เธเนเธฒเธขเน€เธเธดเนเธก {abs(diff):,.2f} เธเธฒเธ—\n"
-                else: msg += f"โ€ข {name}: เน€เธฃเธตเธขเธเธฃเนเธญเธขเนเธฅเนเธง\n"
+                if diff > 0: msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
+                elif diff < 0: msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
+                else: msg += f"• {name}: เรียบร้อยแล้ว\n"
         try:
             if supabase: supabase.table("trips").update({"status": "closed", "currency_code": currency_code}).eq("id", trip_id).execute()
         except Exception as e: logger.error(f"Close trip error: {e}")
@@ -1246,40 +1246,40 @@ def handle_text(event):
     if text_lower == "excel":
         trip = get_active_trip(user_id, group_id)
         if not trip:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธตเธ—เธฃเธดเธเธ—เธตเนเธเธณเธฅเธฑเธเธ—เธณเธเธฒเธเธญเธขเธนเน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
         excel_buffer, error = export_trip_to_excel(trip['id'], trip['title'])
         if error:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เธชเธฃเนเธฒเธ Excel: {error}"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถสร้าง Excel: {error}"))
             return
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{trip['title']}_{timestamp}.xlsx"
         public_url, upload_error = upload_excel_to_supabase(excel_buffer, filename)
         if upload_error:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ เธญเธฑเธเนเธซเธฅเธ”เธฅเนเธกเน€เธซเธฅเธง: {upload_error}"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ อัพโหลดล้มเหลว: {upload_error}"))
             return
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ… เธชเธฃเนเธฒเธเนเธเธฅเน Excel เธชเธณเน€เธฃเนเธ!\n๐“ เธ—เธฃเธดเธ: {trip['title']}\n๐”— {public_url}"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สร้างไฟล์ Excel สำเร็จ!\n📊 ทริป: {trip['title']}\n🔗 {public_url}"))
         return
 
-    if text in ["เธเธฃเธฐเธงเธฑเธ•เธด", "history"]:
+    if text in ["ประวัติ", "history"]:
         if not supabase: return
         try:
             res = supabase.table("trips").select("*").order("created_at", desc=True).limit(10).execute()
             all_trips = res.data if res.data else []
             if not all_trips:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="๐“ เธขเธฑเธเนเธกเนเธกเธตเธเธฃเธฐเธงเธฑเธ•เธดเธ—เธฃเธดเธ"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="📜 ยังไม่มีประวัติทริป"))
                 return
-            msg = "๐“ เธเธฃเธฐเธงเธฑเธ•เธดเธ—เธฃเธดเธ (10 เธ—เธฃเธดเธเธฅเนเธฒเธชเธธเธ”):\n\n"
+            msg = "📜 ประวัติทริป (10 ทริปล่าสุด):\n\n"
             for i, trip in enumerate(all_trips, 1):
                 status_icon = "๐ข" if trip['status'] == 'active' else "๐”ด"
                 start_date = trip.get('created_at', '')[:10]
-                end_date = trip.get('updated_at', '')[:10] if trip['status'] == 'closed' else "เธขเธฑเธเนเธกเนเธเธ"
-                msg += f"{i}. {status_icon} {trip['title']}\n   ๐“… {start_date} โ’ {end_date}\n   ๐‘ เธเธดเธกเธเน: excel {i}\n\n"
+                end_date = trip.get('updated_at', '')[:10] if trip['status'] == 'closed' else "ยังไม่จบ"
+                msg += f"{i}. {status_icon} {trip['title']}\n   📅 {start_date} → {end_date}\n   👉 พิมพ์: excel {i}\n\n"
             set_state(user_id, {"action": "export_history", "trips": all_trips})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         except Exception as e:
             logger.error(f"History error: {e}")
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เธ”เธถเธเธเนเธญเธกเธนเธฅเนเธ”เน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถดึงข้อมูลได้"))
         return
 
     if state and state.get("action") == "export_history":
@@ -1302,14 +1302,14 @@ def handle_text(event):
                         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ {upload_error}"))
                         clear_state(user_id)
                         return
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ… Excel เธชเธณเน€เธฃเนเธ!\n๐“ {selected['title']}\n๐”— {public_url}"))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ Excel สำเร็จ!\n📊 {selected['title']}\n🔗 {public_url}"))
                 else:
-                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ ๏ธ เธซเธกเธฒเธขเน€เธฅเธเนเธกเนเธ–เธนเธเธ•เนเธญเธ (เธกเธต 1-{len(trips)})"))
+                    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"⚠️ หมายเลขไม่ถูกต้อง (มี 1-{len(trips)})"))
             except ValueError:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธเธฃเธธเธ“เธฒเธเธดเธกเธเนเธ•เธฑเธงเน€เธฅเธเน€เธ—เนเธฒเธเธฑเนเธ เน€เธเนเธ excel 1"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ตัวเลขเท่านั้น เช่น excel 1"))
             except Exception as e:
                 logger.error(f"Export history error: {e}")
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ เน€เธเธดเธ”เธเนเธญเธเธดเธ”เธเธฅเธฒเธ”: {str(e)}"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ เกิดข้อผิดพลาด: {str(e)}"))
             clear_state(user_id)
             return
         else:
@@ -1319,25 +1319,25 @@ def handle_text(event):
         events = get_active_events()
         base_url = "https://line-chat-bot-trip-manager.onrender.com"
         if not events:
-            msg = f"๐” เธ•เธฃเธงเธเธชเธญเธเธฃเธฒเธขเธเธทเนเธญเธเธดเธง Event เธเธฑเธเธเธธเธเธฑเธ...\n=======================\nโน๏ธ เนเธกเนเธกเธตเธเธดเธง Event เธ—เธตเนเน€เธเธดเธ”เธญเธขเธนเน\n-----------------------\n\n๐’ป เธฅเธดเธเธเนเธเธงเธเธเธธเธกเนเธเธเธฃเธฐเธเธ:\n{base_url}"
+            msg = f"🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\nℹ️ ไม่มีคิว Event ที่เปิดอยู่\n-----------------------\n\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
         else:
-            msg = "๐” เธ•เธฃเธงเธเธชเธญเธเธฃเธฒเธขเธเธทเนเธญเธเธดเธง Event เธเธฑเธเธเธธเธเธฑเธ...\n=======================\n"
+            msg = "🔍 ตรวจสอบรายชื่อคิว Event ปัจจุบัน...\n=======================\n"
             for i, e in enumerate(events, 1):
-                msg += f"{i}. เธเธฒเธ: {e.get('name', '-')}\nโฐ เน€เธงเธฅเธฒเธเธฒเธข: {e.get('saleTime', '-')}\n เธฅเธดเธเธเนเธเธฒเธ: {e.get('url', '-')}\n-----------------------\n"
-            msg += f"\n๐’ป เธฅเธดเธเธเนเธเธงเธเธเธธเธกเนเธเธเธฃเธฐเธเธ:\n{base_url}"
+                msg += f"{i}. งาน: {e.get('name', '-')}\n⏰ เวลาขาย: {e.get('saleTime', '-')}\n ลิงก์งาน: {e.get('url', '-')}\n-----------------------\n"
+            msg += f"\n💻 ลิงก์ควบคุมแผงระบบ:\n{base_url}"
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
     if text_lower == "stop event":
         events = get_active_events()
         if not events:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธต Event เธ—เธตเนเธเธณเธฅเธฑเธเธ—เธณเธเธฒเธเธญเธขเธนเน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มี Event ที่กำลังทำงานอยู่"))
             return
         set_state(user_id, {"action": "stop_event", "events": events})
-        msg = "๐ซ เน€เธฅเธทเธญเธเธซเธกเธฒเธขเน€เธฅเธ Event เธ—เธตเนเธเธธเธ“เธ•เนเธญเธเธเธฒเธฃเธชเธฑเนเธเธซเธขเธธเธ”เธ—เธณเธเธฒเธ (Stop):\n=======================\n"
+        msg = "🚫 เลือกหมายเลข Event ที่คุณต้องการสั่งหยุดทำงาน (Stop):\n=======================\n"
         for i, e in enumerate(events, 1):
-            msg += f"{i}. เธเธฒเธ: {e.get('name', '-')}\n๐‘ (ID: {e.get('id', '-')})\n-----------------------\n"
-        msg += " เธเธดเธกเธเนเน€เธเธเธฒเธฐ [เธ•เธฑเธงเน€เธฅเธเธฅเธณเธ”เธฑเธ] เน€เธเธทเนเธญเธฃเธฐเธเธธเน€เธฅเธทเธญเธเธเธดเธ”เธเธฒเธเธเธดเนเธเธเธฑเนเธเนเธ”เนเน€เธฅเธขเธเธฃเธฑเธ"
+            msg += f"{i}. งาน: {e.get('name', '-')}\n🛑 (ID: {e.get('id', '-')})\n-----------------------\n"
+        msg += " พิมพ์เฉพาะ [ตัวเลขลำดับ] เพื่อระบุเลือกปิดงานชิ้นนั้นได้เลยครับ"
         line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         return
 
@@ -1349,14 +1349,14 @@ def handle_text(event):
             if 0 <= choice < len(events):
                 selected = events[choice]
                 supabase.table("schedules").update({"active": False}).eq("id", selected.get('id')).execute()
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"โ… เธชเธฑเนเธเธเธดเธ”เธเธฒเธเน€เธฃเธตเธขเธเธฃเนเธญเธขเนเธฅเนเธง!\n๐‘ เธชเธฑเนเธเธซเธขเธธเธ”เธ เธฒเธฃเธเธดเธเธเธฒเธ: {selected.get('name', '-')}"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ สั่งปิดงานเรียบร้อยแล้ว!\n🛑 สั่งหยุดภารกิจงาน: {selected.get('name', '-')}"))
             else:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธซเธกเธฒเธขเน€เธฅเธเนเธกเนเธ–เธนเธเธ•เนเธญเธ เธเธฃเธธเธ“เธฒเธฅเธญเธเนเธซเธกเน"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ หมายเลขไม่ถูกต้อง กรุณาลองใหม่"))
         except ValueError:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เธเธฃเธธเธ“เธฒเธเธดเธกเธเนเธซเธกเธฒเธขเน€เธฅเธเน€เธ—เนเธฒเธเธฑเนเธ"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์หมายเลขเท่านั้น"))
         except Exception as e:
             logger.error(f"Stop event error: {e}")
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ เน€เธเธดเธ”เธเนเธญเธเธดเธ”เธเธฅเธฒเธ” เธเธฃเธธเธ“เธฒเธฅเธญเธเนเธซเธกเน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ เกิดข้อผิดพลาด กรุณาลองใหม่"))
         clear_state(user_id)
         return
 
@@ -1387,27 +1387,27 @@ def handle_image(event):
                     existing["schedule"] = sort_showtime_by_time(schedule)
                     existing["last_updated"] = datetime.now().isoformat()
                     save_showtime(existing, state.get("event_name"))
-                    msg = "โ… เธญเธฑเธเน€เธ”เธ• Showtime เน€เธชเธฃเนเธ!\n\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))
+                    msg = "✅ อัปเดต Showtime เสร็จ!\n\n" + format_showtime_message(state.get("show_date"), state.get("event_name"))
                 else:
                     state["showtime_temp"] = showtime_list
-                    msg = "โ… เธญเนเธฒเธเธเนเธญเธกเธนเธฅ Showtime เธชเธณเน€เธฃเนเธ\n\n๐“ เธ•เธฒเธฃเธฒเธเธเธฑเนเธงเธเธฃเธฒเธง:\n"
+                    msg = "✅ อ่านข้อมูล Showtime สำเร็จ\n\n📋 ตารางชั่วคราว:\n"
                     for item in showtime_list: msg += f"โฑ๏ธ {item['time']} |  {item['artist']}\n"
-                    msg += "\n๐‘ เธเธดเธกเธเน 'save' เน€เธเธทเนเธญเธเธฑเธเธ—เธถเธ"
+                    msg += "\n👉 พิมพ์ 'save' เพื่อบันทึก"
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
             else:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธเธเธเนเธญเธกเธนเธฅ Showtime เนเธเธฃเธนเธ"))
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบข้อมูล Showtime ในรูป"))
         except Exception as e:
             logger.error(f"Showtime OCR error: {e}")
             logger.error(traceback.format_exc())
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เธญเนเธฒเธเธฃเธนเธเนเธ”เน"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้"))
         return
 
     trip = get_active_trip(user_id, group_id)
     if not trip:
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธกเธตเธ—เธฃเธดเธเธ—เธตเนเธเธณเธฅเธฑเธเธ—เธณเธเธฒเธเธญเธขเธนเน"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
         return
     set_state(user_id, {"action": "wait_slip_payer", "message_id": event.message.id, "trip_id": trip['id'], "group_id": group_id})
-    line_bot_api.reply_message(reply_token, TextSendMessage(text="๐งพ เธเธเธชเธฅเธดเธ/เธเธดเธฅ\nเธเธฃเธธเธ“เธฒเธเธดเธกเธเนเธเธทเนเธญเธเธเธ—เธตเนเธ•เนเธญเธเธฃเธฑเธเธเธดเธ”เธเธญเธเธขเธญเธ”เธเธตเน\n(เธซเธฃเธทเธญเธเธดเธกเธเน 'เธเธฑเธ' เน€เธเธทเนเธญเนเธเนเธเธทเนเธญเธเธธเธ“)"))
+    line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\nกรุณาพิมพ์ชื่อคนที่ต้องรับผิดชอบยอดนี้\n(หรือพิมพ์ 'ฉัน' เพื่อใช้ชื่อคุณ)"))
 
 def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants):
     if not vision_client or not supabase: return
@@ -1419,17 +1419,17 @@ def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token,
         amount = extract_amount(text_detected)
         if amount:
             timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
-            result = supabase.table("expenses").insert({"trip_id": trip_id, "line_user_id": user_id, "payer_name": payer_name, "amount": amount, "item_name": f"เธเธดเธฅ {timestamp}", "currency": "THB", "tag": "#เธชเธฅเธดเธ", "participants": participants, "slip_url": f"slip_{message_id}"}).execute()
+            result = supabase.table("expenses").insert({"trip_id": trip_id, "line_user_id": user_id, "payer_name": payer_name, "amount": amount, "item_name": f"บิล {timestamp}", "currency": "THB", "tag": "#สลิป", "participants": participants, "slip_url": f"slip_{message_id}"}).execute()
             new_id = result.data[0]['id'] if result.data else None
             ppl_txt = " ".join(participants or [])
-            success_msg = f"โ… เธเธฑเธเธ—เธถเธ {amount:,.2f} เธเธฒเธ— (#เธชเธฅเธดเธ)\nเธเนเธฒเธข: {payer_name}\nเธซเธฒเธฃ: {ppl_txt}"
-            if new_id: success_msg += f"\nโ๏ธ เนเธเนเนเธ: edit {new_id:04d} {amount}"
+            success_msg = f"✅ บันทึก {amount:,.2f} บาท (#สลิป)\nจ่าย: {payer_name}\nหาร: {ppl_txt}"
+            if new_id: success_msg += f"\n✏️ แก้ไข: edit {new_id:04d} {amount}"
             line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
         else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="โ ๏ธ เนเธกเนเธเธเธเธณเธเธงเธเน€เธเธดเธเนเธเธฃเธนเธ\n๐“ เธฅเธญเธเธเธฑเธเธ—เธถเธเธ”เนเธงเธขเธเนเธญเธเธงเธฒเธก เน€เธเนเธ 'เธเธญเธฅ เธเนเธฒเน€เธซเธฅเนเธฒ 500'"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในรูป\n📌 ลองบันทึกด้วยข้อความ เช่น 'บอล ค่าเหล้า 500'"))
     except Exception as e:
         logger.error(f"Process slip with payer error: {e}")
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="โ เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เธญเนเธฒเธเธฃเธนเธเนเธ”เน"))
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้"))
 
 # =================================================================
 # Dashboard Routes
