@@ -680,6 +680,56 @@ def compute_trip_balances_thb(trip_id, group_id=None):
             people.add(p)
     return total_thb, paid_totals, share_totals, people
 
+def _expense_participants(exp, fallback_payer=None):
+    ppl = exp.get("participants") or []
+    if isinstance(ppl, str):
+        ppl = [p.strip() for p in ppl.split() if p.strip()]
+    ppl = [str(p).strip() for p in ppl if str(p).strip()]
+    if not ppl and fallback_payer:
+        ppl = [fallback_payer]
+    return ppl
+
+def _has_clear_single_payer(exp, participants):
+    payer = str(exp.get("payer_name") or "").strip()
+    if not payer:
+        return False
+    return payer in participants
+
+def compute_end_trip_reports(trip_id):
+    expenses = get_all_expenses(trip_id)
+    total_thb = 0.0
+    category_totals = {}
+    paid_totals = {}
+    share_totals = {}
+    people = set()
+
+    for exp in expenses:
+        amt_thb = get_expense_amount_thb(exp)
+        if amt_thb <= 0:
+            continue
+        total_thb += amt_thb
+
+        payer = str(exp.get("payer_name") or "").strip()
+        participants = _expense_participants(exp, payer)
+        if not participants:
+            continue
+
+        tag = exp.get("tag") or "#ทั่วไป"
+        share = amt_thb / max(len(participants), 1)
+        if tag not in category_totals:
+            category_totals[tag] = {}
+        for name in participants:
+            category_totals[tag][name] = category_totals[tag].get(name, 0.0) + share
+
+        if _has_clear_single_payer(exp, participants):
+            paid_totals[payer] = paid_totals.get(payer, 0.0) + amt_thb
+            people.add(payer)
+            for name in participants:
+                share_totals[name] = share_totals.get(name, 0.0) + share
+                people.add(name)
+
+    return total_thb, category_totals, paid_totals, share_totals, people
+
 def load_schedules():
     if not supabase: return []
     try:
@@ -1497,39 +1547,38 @@ def handle_text(event):
         trip_id = state["trip_id"]
         trip_title = state["trip_title"]
         currency_code = state.get("currency_code", "THB")
-        total_thb, paid_totals, share_totals, people = compute_trip_balances_thb(trip_id, group_id)
+        total_thb, category_totals, paid_totals, share_totals, people = compute_end_trip_reports(trip_id)
         if total_thb == 0:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 ทริป: {trip_title}\n⚠️ ไม่มีรายการค่าใช้จ่ายให้หาร"))
             clear_state(user_id)
             return
-        real_people = sorted(list(people)) if people else []
-        # ใช้จำนวนคนที่ผู้ใช้กรอกเป็นตัวหารหลัก เพื่อไม่ให้ชื่อ payer แบบกลุ่มถูกนับซ้ำเป็นอีกคน
-        real_n = num_people
-        avg = total_thb / max(real_n, 1)
         exchange_rate = 1
         if currency_code != "THB":
             rate = get_exchange_rate("THB", currency_code)
             if rate: exchange_rate = rate
             else: currency_code = "THB"
-        msg = f"🚀 ทริป: {trip_title}\n👥 จำนวนคน: {real_n}\n\n"
+        msg = f"🚀 ทริป: {trip_title}\n👥 จำนวนคน: {num_people}\n\n"
         if currency_code != "THB" and exchange_rate != 1:
             msg += f"💱 อัตราแลกเปลี่ยน: 1 THB = {exchange_rate:.4f} {currency_code}\n\n"
-            msg += f"📉 ยอดหารเฉลี่ย:\n   • {avg:,.2f} บาท/คน\n   • ≈ {avg * exchange_rate:,.2f} {currency_code}/คน\n\n"
-        else:
-            msg += f"📉 ยอดหารเฉลี่ย: {avg:,.2f} บาท/คน\n\n"
-        msg += "💵 ยอดสรุปสุทธิ (จ่ายเพิ่ม/รับคืน):\n"
-        for name in real_people:
-            paid = paid_totals.get(name, 0.0)
-            share = share_totals.get(name, 0.0)
-            diff = paid - share
+
+        total_by_person = {}
+        msg += "📂 ยอดต้องจ่ายตามหมวด:\n"
+        for tag, member_totals in sorted(category_totals.items()):
+            msg += f"{tag}\n"
+            for name, amount_due in sorted(member_totals.items()):
+                total_by_person[name] = total_by_person.get(name, 0.0) + amount_due
+                if currency_code != "THB" and exchange_rate != 1:
+                    msg += f"• {name}: {amount_due:,.2f} บาท (≈ {amount_due * exchange_rate:,.2f} {currency_code})\n"
+                else:
+                    msg += f"• {name}: {amount_due:,.2f} บาท\n"
+            msg += "--------------------------------\n"
+
+        msg += "💵 ยอดรวมที่ต้องจ่ายทั้งทริป:\n"
+        for name, amount_due in sorted(total_by_person.items()):
             if currency_code != "THB" and exchange_rate != 1:
-                if diff > 0: msg += f"• {name}: รับคืน {diff:,.2f} บาท (≈ {diff * exchange_rate:,.2f} {currency_code})\n"
-                elif diff < 0: msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท (≈ {abs(diff) * exchange_rate:,.2f} {currency_code})\n"
-                else: msg += f"• {name}: เรียบร้อยแล้ว\n"
+                msg += f"• {name}: {amount_due:,.2f} บาท (≈ {amount_due * exchange_rate:,.2f} {currency_code})\n"
             else:
-                if diff > 0: msg += f"• {name}: รับคืน {diff:,.2f} บาท\n"
-                elif diff < 0: msg += f"• {name}: จ่ายเพิ่ม {abs(diff):,.2f} บาท\n"
-                else: msg += f"• {name}: เรียบร้อยแล้ว\n"
+                msg += f"• {name}: {amount_due:,.2f} บาท\n"
         try:
             if supabase: supabase.table("trips").update({"status": "closed", "currency_code": currency_code}).eq("id", trip_id).execute()
         except Exception as e: logger.error(f"Close trip error: {e}")
