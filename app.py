@@ -440,30 +440,52 @@ def parse_enhanced_expense(text, default_payer_name=None):
 def extract_amount(text):
     if not text: return None
     lines = text.split('\n')
-    amount_labels = ['จำนวน', 'amount']
+    amount_labels = ['จำนวน', 'amount', 'ยอด', 'total']
+    money_pattern = r'(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)'
+
+    # 1) หา amount จากบรรทัด label และบรรทัดถัดไป 1-2 บรรทัดก่อน
     for i, line in enumerate(lines):
         line_lower = line.lower().strip()
         if any(label in line_lower for label in amount_labels):
-            amounts = re.findall(r'(\d{1,3}(?:,\d{3})(?:\.\d{1,2})?)', line)
-            for a in amounts:
-                try:
-                    num = float(a.replace(',', ''))
-                    if 1 <= num <= 1000000: return num
-                except: continue
-        if i + 1 < len(lines):
-            next_line = lines[i + 1].strip()
-            amounts = re.findall(r'(\d{1,3}(?:,\d{3})(?:\.\d{1,2})?)', next_line)
-            for a in amounts:
-                try:
-                    num = float(a.replace(',', ''))
-                    if 1 <= num <= 1000000: return num
-                except: continue
-    baht_matches = re.findall(r'(\d{1,3}(?:,\d{3})(?:\.\d{1,2})?)\sบาท', text)
+            window_lines = [line.strip()]
+            if i + 1 < len(lines): window_lines.append(lines[i + 1].strip())
+            if i + 2 < len(lines): window_lines.append(lines[i + 2].strip())
+            for candidate_line in window_lines:
+                amounts = re.findall(money_pattern, candidate_line)
+                for a in amounts:
+                    try:
+                        num = float(a.replace(',', ''))
+                        if 1 <= num <= 1000000:
+                            return num
+                    except:
+                        continue
+
+    # 2) หาเลขที่อยู่หน้า "บาท" แล้วเลือกค่าบวกที่มากสุดก่อน 0.00
+    baht_matches = re.findall(money_pattern + r'\s*บาท', text)
+    baht_values = []
     for a in baht_matches:
         try:
             num = float(a.replace(',', ''))
-            if 1 <= num <= 1000000: return num
-        except: continue
+            if 1 <= num <= 1000000:
+                baht_values.append(num)
+        except:
+            continue
+    if baht_values:
+        return max(baht_values)
+
+    # 3) fallback: หาเลขทศนิยมที่ดูเป็นจำนวนเงิน และตัดเลขวันที่/เวลา/เลขอ้างอิงยาวๆ ออก
+    decimal_matches = re.findall(r'(?<![\d/:-])(\d{1,3}(?:,\d{3})*(?:\.\d{2}))(?![\d])', text)
+    decimal_values = []
+    for a in decimal_matches:
+        try:
+            num = float(a.replace(',', ''))
+            if 1 <= num <= 1000000:
+                decimal_values.append(num)
+        except:
+            continue
+    if decimal_values:
+        return max(decimal_values)
+
     return None
 
 def _to_thai_date_str(iso_str):
@@ -856,22 +878,23 @@ def handle_text(event):
 
     # --- Follow-up states for Slip ---
     if state and state.get("action") == "wait_slip_payer":
-        payer_name = text
-        if payer_name in ["ฉัน", "ฉันเอง", "me"]: payer_name = get_display_name(user_id, state.get('group_id'))
-        set_state(user_id, {"action": "wait_slip_participants", "message_id": state["message_id"], "trip_id": state["trip_id"], "group_id": state.get("group_id"), "payer_name": payer_name})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=" หารกับใครบ้าง?\nพิมพ์ชื่อคั่นด้วยเว้นวรรค เช่น: บอล ปาค เอ็ม"))
-        return
-
-    if state and state.get("action") == "wait_slip_participants":
-        names = [n.strip() for n in text.split() if n.strip()]
-        if not names:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์รายชื่ออย่างน้อย 1 คน"))
+        raw_text = text.strip()
+        if not raw_text:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ชื่ออย่างน้อย 1 คน"))
             return
-        my_name = get_display_name(user_id, state.get('group_id'))
-        names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
-        payer_name = state.get("payer_name")
-        threading.Thread(target=process_slip_with_payer, args=(state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, names)).start()
-        clear_state(user_id)
+        if raw_text.lower() in ["ฉัน", "ฉันเอง", "me"]:
+            payer_name = get_display_name(user_id, state.get('group_id'))
+            participants = [payer_name]
+        else:
+            participants = [n.strip() for n in raw_text.split() if n.strip()]
+            if not participants:
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ชื่ออย่างน้อย 1 คน"))
+                return
+            payer_name = raw_text
+        threading.Thread(
+            target=process_slip_with_payer,
+            args=(state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, participants)
+        ).start()
         return
 
     # --- Follow-up states for Expense ---
@@ -1328,7 +1351,7 @@ def handle_text(event):
 
     # --- BLOCK 3: Enhanced Expense Parsing ---
     # guard: ห้าม parse expense ขณะรอ input หรืออยู่ใน state อื่น
-    SLIP_STATES = {"wait_slip_payer", "wait_slip_participants", "wait_expense_participants",
+    SLIP_STATES = {"wait_slip_payer", "wait_expense_participants",
                    "showtime_mode", "wait_showtime_add_confirm", "wait_showtime_event_name", "wait_showtime_date",
                    "wait_end_showtime_event_index", "wait_end_showtime_confirm", "wait_trip_name", "end_trip",
                    "edit_selection", "edit_amount", "stop_event", "export_history"}
@@ -1588,7 +1611,7 @@ def handle_image(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
         return
     set_state(user_id, {"action": "wait_slip_payer", "message_id": event.message.id, "trip_id": trip['id'], "group_id": group_id})
-    line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\nกรุณาพิมพ์ชื่อคนที่ต้องรับผิดชอบยอดนี้\n(หรือพิมพ์ 'ฉัน' เพื่อใช้ชื่อคุณ)"))
+    line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\nกรุณาพิมพ์ชื่อคนที่ต้องรับผิดชอบยอดนี้\nเช่น บอล ปาค\n(หรือพิมพ์ 'ฉัน' เพื่อใช้ชื่อคุณ)"))
 
 def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants):
     if not vision_client or not supabase: return
