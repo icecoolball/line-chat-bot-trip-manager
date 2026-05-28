@@ -1432,6 +1432,25 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, build_report_flex(title=f"📅 ยอดวันนี้ ({today_str})", subtitle="\n".join(subtitle_parts), lines=lines, alt_text="ยอดวันนี้"))
         return
 
+    # --- End Trip Command ---
+    # ต้องจับ command นี้ก่อน expense parser ไม่งั้นข้อความ "end trip" จะถูกกินแล้ว return ทิ้ง
+    if text == "จบทริป" or text.startswith("จบทริป ") or text_lower == "end trip" or text_lower.startswith("end trip "):
+        trip = get_active_trip(user_id, group_id)
+        if not trip:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
+            return
+        currency_code = get_trip_base_currency(trip)
+        if text.startswith("จบทริป "):
+            parts = text.split()
+            if len(parts) >= 2: currency_code = parts[1].upper()
+        elif text_lower.startswith("end trip "):
+            parts = text_lower.split()
+            if len(parts) >= 3: currency_code = parts[2].upper()
+        currency_code = _normalize_currency(currency_code) or get_trip_base_currency(trip)
+        set_state(user_id, {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title'], "currency_code": currency_code})
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n💱 แปลงเป็นสกุล: {currency_code}\n\n👥 ระบุจำนวนคนที่จะหาร: "))
+        return
+
     # --- BLOCK 3: Enhanced Expense Parsing ---
     # guard: ห้าม parse expense ขณะรอ input หรืออยู่ใน state อื่น
     SLIP_STATES = {"wait_slip_payer", "wait_expense_participants",
@@ -1458,24 +1477,7 @@ def handle_text(event):
             except Exception as e: logger.error(f"Save expense error: {e}")
         return
 
-    # --- Other Commands (End Trip, Excel, History, Event) ---
-    if text == "จบทริป" or text.startswith("จบทริป ") or text_lower == "end trip" or text_lower.startswith("end trip "):
-        trip = get_active_trip(user_id, group_id)
-        if not trip:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
-            return
-        currency_code = get_trip_base_currency(trip)
-        if text.startswith("จบทริป "):
-            parts = text.split()
-            if len(parts) >= 2: currency_code = parts[1].upper()
-        elif text_lower.startswith("end trip "):
-            parts = text_lower.split()
-            if len(parts) >= 3: currency_code = parts[2].upper()
-        currency_code = _normalize_currency(currency_code) or get_trip_base_currency(trip)
-        set_state(user_id, {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title'], "currency_code": currency_code})
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n💱 แปลงเป็นสกุล: {currency_code}\n\n👥 ระบุจำนวนคนที่จะหาร: "))
-        return
-
+    # --- Other Commands (Excel, History, Event) ---
     if state and state.get("action") == "end_trip":
         try:
             num_people = int(text)
