@@ -1362,7 +1362,7 @@ def handle_text(event):
         for tag, data in sorted(categories.items()):
             ppl_str = " ".join(sorted(data['participants']))
             line = f"{tag} {data['total_thb']:,.0f} {ppl_str}"
-            if target_curr != "THB": line += f" (โ {data['total_thb'] * rate_to_target:,.2f} {target_curr})"
+            if target_curr != "THB": line += f" (ประมาณ {data['total_thb'] * rate_to_target:,.2f} {target_curr})"
             lines.append(line)
         line_bot_api.reply_message(reply_token, build_report_flex(title=f"📅 ยอดวันนี้ ({today_str})", subtitle="\n".join(subtitle_parts), lines=lines, alt_text="ยอดวันนี้"))
         return
