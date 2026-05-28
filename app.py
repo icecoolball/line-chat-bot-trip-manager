@@ -342,6 +342,15 @@ CURRENCY_RATES = {"THB": 1, "JPY": 0.23, "USD": 34.5, "KRW": 0.025}
 _RATE_CACHE = {}
 _RATE_CACHE_TTL_SECONDS = 1800
 
+def get_fallback_exchange_rate(from_curr, to_curr):
+    from_curr = (from_curr or "THB").upper()
+    to_curr = (to_curr or "THB").upper()
+    from_to_thb = CURRENCY_RATES.get(from_curr)
+    to_to_thb = CURRENCY_RATES.get(to_curr)
+    if from_to_thb and to_to_thb:
+        return float(from_to_thb) / float(to_to_thb)
+    return 1.0
+
 def get_exchange_rate(from_curr, to_curr):
     if from_curr == to_curr: return 1.0
     from_curr = (from_curr or "").upper()
@@ -358,16 +367,16 @@ def get_exchange_rate(from_curr, to_curr):
         if rate:
             _RATE_CACHE[key] = {"rate": float(rate), "ts": now_ts}
             return float(rate)
-        fallback = CURRENCY_RATES.get(to_curr, 1.0)
+        fallback = get_fallback_exchange_rate(from_curr, to_curr)
         _RATE_CACHE[key] = {"rate": float(fallback), "ts": now_ts}
         return float(fallback)
     except:
         if cached and cached.get("rate"): return cached["rate"]
-        return CURRENCY_RATES.get(to_curr, 1.0)
+        return get_fallback_exchange_rate(from_curr, to_curr)
 
 _CURRENCY_ALIASES = {
     "THB": "THB", "JPY": "JPY", "USD": "USD", "KRW": "KRW",
-    "บาท": "THB", "baht": "THB",
+    "บาท": "THB", "บ.": "THB", "baht": "THB",
     "เยน": "JPY", "yen": "JPY",
     "วอน": "KRW", "won": "KRW",
     "ดอลลาร์": "USD", "ดอลลาร์สหรัฐ": "USD", "usd": "USD",
@@ -388,7 +397,45 @@ def _parse_amount_token(token):
         return v if v > 0 else None
     except: return None
 
-def parse_enhanced_expense(text, default_payer_name=None):
+def get_trip_base_currency(trip):
+    return _normalize_currency((trip or {}).get("base_currency")) or "THB"
+
+def compute_amount_thb(amount, currency):
+    curr = _normalize_currency(currency) or "THB"
+    amt = float(amount or 0)
+    if curr == "THB":
+        return amt, 1.0
+    rate = get_exchange_rate(curr, "THB") or CURRENCY_RATES.get(curr, 1.0)
+    return amt * float(rate), float(rate)
+
+def get_expense_amount_thb(exp):
+    stored = exp.get("amount_thb")
+    if stored is not None:
+        try:
+            return float(stored)
+        except:
+            pass
+    amount = float(exp.get("amount") or 0)
+    currency = exp.get("currency") or "THB"
+    amount_thb, _ = compute_amount_thb(amount, currency)
+    return amount_thb
+
+def create_trip_with_currency(user_id, group_id, trip_name, base_currency):
+    if not supabase:
+        return False
+    currency = _normalize_currency(base_currency) or "THB"
+    payload = {
+        "title": trip_name,
+        "status": "active",
+        "line_group_id": group_id,
+        "creator_id": user_id,
+        "base_currency": currency,
+    }
+    supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
+    supabase.table("trips").insert(payload).execute()
+    return True
+
+def parse_enhanced_expense(text, default_payer_name=None, default_currency="THB"):
     raw = (text or "").strip()
     if not raw: return None, None, None, None, None, None
     parts = [p for p in raw.split() if p.strip()]
@@ -403,7 +450,7 @@ def parse_enhanced_expense(text, default_payer_name=None):
         
     if amt_idx is None: return None, None, None, None, None, None
 
-    currency = "THB"
+    currency = _normalize_currency(default_currency) or "THB"
     after_amt_idx = amt_idx + 1
     if after_amt_idx < len(parts):
         maybe_curr = _normalize_currency(parts[after_amt_idx])
@@ -443,21 +490,26 @@ def parse_enhanced_expense(text, default_payer_name=None):
 def parse_slip_assignment_text(text, user_id=None, group_id=None):
     raw = (text or "").strip()
     if not raw:
-        return None, None, None
+        return None, None, None, None
     tokens = [t.strip() for t in raw.split() if t.strip()]
     tag = None
+    currency = None
     participants = []
     for token in tokens:
         if token.startswith("#") and not tag:
             tag = token
             continue
+        maybe_currency = _normalize_currency(token)
+        if maybe_currency and not currency:
+            currency = maybe_currency
+            continue
         participants.append(token)
     if not participants:
-        return None, None, tag
+        return None, None, tag, currency
     if len(participants) == 1 and participants[0].lower() in ["ฉัน", "ฉันเอง", "me"]:
         display_name = get_display_name(user_id, group_id) if user_id else participants[0]
-        return display_name, [display_name], tag
-    return " ".join(participants), participants, tag
+        return display_name, [display_name], tag, currency
+    return " ".join(participants), participants, tag, currency
 
 def extract_amount(text):
     if not text: return None
@@ -583,7 +635,17 @@ def get_all_expenses(trip_id):
 def update_expense_amount(expense_id, new_amount):
     if not supabase: return False
     try:
-        supabase.table("expenses").update({"amount": new_amount}).eq("id", expense_id).execute()
+        res = supabase.table("expenses").select("*").eq("id", expense_id).limit(1).execute()
+        rows = res.data if res.data else []
+        if not rows:
+            return False
+        currency = rows[0].get("currency") or "THB"
+        amount_thb, rate_used = compute_amount_thb(new_amount, currency)
+        supabase.table("expenses").update({
+            "amount": new_amount,
+            "amount_thb": amount_thb,
+            "exchange_rate_used": rate_used,
+        }).eq("id", expense_id).execute()
         return True
     except: return False
 
@@ -594,9 +656,7 @@ def compute_trip_balances_thb(trip_id, group_id=None):
     share_totals = {}
     people = set()
     for exp in expenses:
-        curr = exp.get("currency", "THB")
-        amt_thb = float(exp.get("amount") or 0)
-        if curr != "THB": amt_thb *= (get_exchange_rate(curr, "THB") or 1.0)
+        amt_thb = get_expense_amount_thb(exp)
         if amt_thb <= 0: continue
         total_thb += amt_thb
         payer = exp.get("payer_name") or get_display_name(exp.get("line_user_id"), group_id)
@@ -648,6 +708,8 @@ def export_trip_to_excel(trip_id, trip_title):
                 "ชื่อทริป": trip_title, "วันที่": date_str, "เวลา": time_str,
                 "ชื่อผู้จ่าย": user_name, "รายการ": exp.get('item_name', ''),
                 "จำนวนเงิน": exp.get('amount', 0), "สกุล": exp.get('currency', 'THB'),
+                "ยอดเทียบบาท": exp.get('amount_thb', ''),
+                "เรทที่ใช้": exp.get('exchange_rate_used', ''),
                 "หมวดหมู่": exp.get('tag', ''), "หาร": " ".join(ppl),
             })
         df = pd.DataFrame(data)
@@ -816,10 +878,7 @@ def daily_summary_cron():
                 curr = exp.get('currency', 'THB')
                 raw_amount = float(exp.get('amount') or 0)
                 currency_totals[curr] = currency_totals.get(curr, 0.0) + raw_amount
-                amt_thb = raw_amount
-                if curr != 'THB':
-                    rate = get_exchange_rate(curr, 'THB')
-                    amt_thb *= (rate or 1.0)
+                amt_thb = get_expense_amount_thb(exp)
                 total_thb += amt_thb
 
                 tag = exp.get('tag') or '#ทั่วไป'
@@ -904,14 +963,14 @@ def handle_text(event):
         if not raw_text:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ชื่ออย่างน้อย 1 คน"))
             return
-        payer_name, participants, slip_tag = parse_slip_assignment_text(raw_text, user_id, state.get("group_id"))
+        payer_name, participants, slip_tag, slip_currency = parse_slip_assignment_text(raw_text, user_id, state.get("group_id"))
         if not payer_name or not participants:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ชื่ออย่างน้อย 1 คน"))
             return
         clear_state(user_id)
         threading.Thread(
             target=process_slip_with_payer,
-            args=(state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, participants, slip_tag)
+            args=(state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, participants, slip_tag, slip_currency or state.get("base_currency"))
         ).start()
         return
 
@@ -925,7 +984,8 @@ def handle_text(event):
         names = [my_name if n in ["ฉัน", "ฉันเอง", "me"] else n for n in names]
         if not supabase: return
         try:
-            supabase.table("expenses").insert({"trip_id": state["trip_id"], "line_user_id": user_id, "payer_name": state["payer_name"], "amount": state["amount"], "item_name": state["item"], "currency": state["currency"], "tag": state["tag"], "participants": names, "slip_url": None}).execute()
+            amount_thb, rate_used = compute_amount_thb(state["amount"], state["currency"])
+            supabase.table("expenses").insert({"trip_id": state["trip_id"], "line_user_id": user_id, "payer_name": state["payer_name"], "amount": state["amount"], "amount_thb": amount_thb, "exchange_rate_used": rate_used, "item_name": state["item"], "currency": state["currency"], "tag": state["tag"], "participants": names, "slip_url": None}).execute()
             curr_txt = f" {state['currency']}" if state['currency'] != "THB" else ""
             tag_txt = f" ({state['tag']})" if state['tag'] else ""
             ppl_txt = " ".join(names)
@@ -946,12 +1006,24 @@ def handle_text(event):
         if not trip_name:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป"))
             return
-        if not supabase: return
-        try:
-            supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
-            supabase.table("trips").insert({"title": trip_name, "status": "active", "line_group_id": group_id, "creator_id": user_id}).execute()
+        set_state(user_id, {"action": "wait_trip_currency", "trip_name": trip_name, "group_id": group_id})
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="💱 ระบุสกุลเงินหลักของทริป\nเช่น THB / JPY / USD / KRW"))
+        return
+
+    if state and state.get("action") == "wait_trip_currency":
+        if text in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกการสร้างทริปแล้ว"))
+            return
+        base_currency = _normalize_currency(text)
+        if not base_currency:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่รู้จักสกุลเงินนี้\nตัวอย่าง: THB / JPY / USD / KRW"))
+            return
+        trip_name = state.get("trip_name")
+        try:
+            create_trip_with_currency(user_id, state.get("group_id") or group_id, trip_name, base_currency)
+            clear_state(user_id)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!\n💱 สกุลเงินหลัก: {base_currency}"))
         except Exception as e:
             logger.error(f"Create trip error: {e}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text="สร้างทริปไม่สำเร็จ"))
@@ -1245,7 +1317,9 @@ def handle_text(event):
                     expenses = get_all_expenses(trip['id'])
                     selected = next((e for e in expenses if e['id'] == inline_id), None)
                     if selected and update_expense_amount(inline_id, inline_amount):
-                        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ แก้ไขรายการ ID {inline_id:04d} เป็น {inline_amount:,.2f} บาท เรียบร้อย!"))
+                        edit_currency = selected.get("currency") or "THB"
+                        curr_txt = "บาท" if edit_currency == "THB" else edit_currency
+                        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ แก้ไขรายการ ID {inline_id:04d} เป็น {inline_amount:,.2f} {curr_txt} เรียบร้อย!"))
                     else: line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ แก้ไขไม่สำเร็จ"))
                 return
             except: pass
@@ -1253,7 +1327,7 @@ def handle_text(event):
         if not expenses:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีรายการค่าใช้จ่ายให้แก้ไข"))
             return
-        lines_edit = [f"ID {exp['id']:04d} | {exp['item_name'][:30]} | {exp['amount']:,.2f} บาท" for exp in expenses]
+        lines_edit = [f"ID {exp['id']:04d} | {exp['item_name'][:30]} | {exp['amount']:,.2f} {exp.get('currency') or 'THB'}" for exp in expenses]
         line_bot_api.reply_message(reply_token, build_report_flex(title="✏️ เลือกรายการแก้ไข", subtitle="พิมพ์: edit [ID] [ยอดใหม่]", lines=lines_edit, alt_text="แก้ไขรายการ"))
         return
 
@@ -1263,14 +1337,8 @@ def handle_text(event):
         if not trip_name:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป"))
             return
-        if not supabase: return
-        try:
-            supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
-            supabase.table("trips").insert({"title": trip_name, "status": "active", "line_group_id": group_id, "creator_id": user_id}).execute()
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
-        except Exception as e:
-            logger.error(f"Create trip error: {e}")
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=" สร้างทริปไม่สำเร็จ"))
+        set_state(user_id, {"action": "wait_trip_currency", "trip_name": trip_name, "group_id": group_id})
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="💱 ระบุสกุลเงินหลักของทริป\nเช่น THB / JPY / USD / KRW"))
         return
 
     if text == "id":
@@ -1291,9 +1359,7 @@ def handle_text(event):
         total_thb = 0
         categories = {}
         for exp in expenses:
-            amt_thb = exp['amount']
-            curr = exp.get('currency', 'THB')
-            if curr != 'THB': amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
+            amt_thb = get_expense_amount_thb(exp)
             total_thb += amt_thb
             tag = exp.get('tag') or '#ทั่วไป'
             if tag not in categories: categories[tag] = {'total': 0, 'participants': set()}
@@ -1334,8 +1400,7 @@ def handle_text(event):
         for exp in today_exp:
             curr = exp.get('currency', 'THB')
             currency_totals[curr] = currency_totals.get(curr, 0) + (exp.get('amount') or 0)
-            amt_thb = exp['amount']
-            if curr != 'THB': amt_thb *= (get_exchange_rate(curr, 'THB') or 1.0)
+            amt_thb = get_expense_amount_thb(exp)
             total_thb += amt_thb
             tag = exp.get('tag') or '#ทั่วไป'
             if tag not in categories: categories[tag] = {'total_thb': 0, 'participants': set()}
@@ -1371,12 +1436,12 @@ def handle_text(event):
     # guard: ห้าม parse expense ขณะรอ input หรืออยู่ใน state อื่น
     SLIP_STATES = {"wait_slip_payer", "wait_expense_participants",
                    "showtime_mode", "wait_showtime_add_confirm", "wait_showtime_event_name", "wait_showtime_date",
-                   "wait_end_showtime_event_index", "wait_end_showtime_confirm", "wait_trip_name", "end_trip",
+                   "wait_end_showtime_event_index", "wait_end_showtime_confirm", "wait_trip_name", "wait_trip_currency", "end_trip",
                    "edit_selection", "edit_amount", "stop_event", "export_history"}
     trip = get_active_trip(user_id, group_id)
     if trip and not (state and state.get("action") in SLIP_STATES):
         default_payer = get_display_name(user_id, group_id)
-        payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer)
+        payer, item, amount, currency, tag, participants = parse_enhanced_expense(text, default_payer_name=default_payer, default_currency=get_trip_base_currency(trip))
         if amount and amount > 0:
             if not participants:
                 set_state(user_id, {"action": "wait_expense_participants", "trip_id": trip['id'], "group_id": group_id, "payer_name": payer, "item": item, "amount": amount, "currency": currency, "tag": tag})
@@ -1384,7 +1449,8 @@ def handle_text(event):
                 return
             if not supabase: return
             try:
-                supabase.table("expenses").insert({"trip_id": trip['id'], "line_user_id": user_id, "payer_name": payer, "amount": amount, "item_name": item or "ค่าใช้จ่าย", "currency": currency, "tag": tag, "participants": participants, "slip_url": None}).execute()
+                amount_thb, rate_used = compute_amount_thb(amount, currency)
+                supabase.table("expenses").insert({"trip_id": trip['id'], "line_user_id": user_id, "payer_name": payer, "amount": amount, "amount_thb": amount_thb, "exchange_rate_used": rate_used, "item_name": item or "ค่าใช้จ่าย", "currency": currency, "tag": tag, "participants": participants, "slip_url": None}).execute()
                 curr_txt = f" {currency}" if currency != "THB" else ""
                 tag_txt = f" ({tag})" if tag else ""
                 ppl_txt = " ".join(participants or [])
@@ -1393,18 +1459,19 @@ def handle_text(event):
         return
 
     # --- Other Commands (End Trip, Excel, History, Event) ---
-    if text.startswith("จบทริป ") or text_lower.startswith("end trip "):
+    if text == "จบทริป" or text.startswith("จบทริป ") or text_lower == "end trip" or text_lower.startswith("end trip "):
         trip = get_active_trip(user_id, group_id)
         if not trip:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
             return
-        currency_code = "THB"
-        if text.startswith("จบทrip "):
+        currency_code = get_trip_base_currency(trip)
+        if text.startswith("จบทริป "):
             parts = text.split()
             if len(parts) >= 2: currency_code = parts[1].upper()
         elif text_lower.startswith("end trip "):
             parts = text_lower.split()
             if len(parts) >= 3: currency_code = parts[2].upper()
+        currency_code = _normalize_currency(currency_code) or get_trip_base_currency(trip)
         set_state(user_id, {"action": "end_trip", "trip_id": trip['id'], "trip_title": trip['title'], "currency_code": currency_code})
         line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🏁 ปิดทริป: {trip['title']}\n💱 แปลงเป็นสกุล: {currency_code}\n\n👥 ระบุจำนวนคนที่จะหาร: "))
         return
@@ -1628,10 +1695,11 @@ def handle_image(event):
     if not trip:
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
         return
-    set_state(user_id, {"action": "wait_slip_payer", "message_id": event.message.id, "trip_id": trip['id'], "group_id": group_id})
-    line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\nกรุณาพิมพ์ #หมวด ตามด้วยชื่อคนที่ต้องรับผิดชอบยอดนี้\nเช่น #ค่าเครื่องดื่ม บอล ปาค\n(หรือพิมพ์ '#ทั่วไป ฉัน' เพื่อใช้ชื่อคุณ)"))
+    base_currency = get_trip_base_currency(trip)
+    set_state(user_id, {"action": "wait_slip_payer", "message_id": event.message.id, "trip_id": trip['id'], "group_id": group_id, "base_currency": base_currency})
+    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🧾 พบสลิป/บิล\nกรุณาพิมพ์ #หมวด ตามด้วยชื่อคนที่ต้องรับผิดชอบยอดนี้\nเช่น #ค่าเครื่องดื่ม บอล ปาค\nถ้าสกุลเงินไม่ใช่ {base_currency} ให้ใส่ต่อท้าย เช่น #ค่าอาหาร บอล ปาค JPY"))
 
-def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants, slip_tag=None):
+def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants, slip_tag=None, slip_currency=None):
     if not vision_client or not supabase: return
     try:
         message_content = line_bot_api.get_message_content(message_id)
@@ -1643,10 +1711,14 @@ def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token,
             try:
                 timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
                 final_tag = slip_tag or "#สลิป"
-                result = supabase.table("expenses").insert({"trip_id": trip_id, "line_user_id": user_id, "payer_name": payer_name, "amount": amount, "item_name": f"บิล {timestamp}", "currency": "THB", "tag": final_tag, "participants": participants, "slip_url": f"slip_{message_id}"}).execute()
+                final_currency = _normalize_currency(slip_currency) or "THB"
+                amount_thb, rate_used = compute_amount_thb(amount, final_currency)
+                result = supabase.table("expenses").insert({"trip_id": trip_id, "line_user_id": user_id, "payer_name": payer_name, "amount": amount, "amount_thb": amount_thb, "exchange_rate_used": rate_used, "item_name": f"บิล {timestamp}", "currency": final_currency, "tag": final_tag, "participants": participants, "slip_url": f"slip_{message_id}"}).execute()
                 new_id = result.data[0]['id'] if result.data else None
                 ppl_txt = " ".join(participants or [])
-                success_msg = f"✅ บันทึก {amount:,.2f} บาท ({final_tag})\nจ่าย: {payer_name}\nหาร: {ppl_txt}"
+                curr_txt = f" {final_currency}" if final_currency != "THB" else " บาท"
+                thb_txt = f"\nเทียบบาท: {amount_thb:,.2f} บาท" if final_currency != "THB" else ""
+                success_msg = f"✅ บันทึก {amount:,.2f}{curr_txt} ({final_tag}){thb_txt}\nจ่าย: {payer_name}\nหาร: {ppl_txt}"
                 if new_id: success_msg += f"\n✏️ แก้ไข: edit {new_id:04d} {amount}"
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
             except Exception as db_err:
