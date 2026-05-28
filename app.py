@@ -332,15 +332,7 @@ def format_showtime_message(show_date=None, event_name=None):
 
 def build_state_text(state):
     if state and state.get("action") in SHOWTIME_ACTIONS:
-        event_name = state.get("event_name") or "-"
-        show_date = state.get("show_date") or "ไม่ระบุ"
-        action = state.get("action") or "-"
-        return (
-            "🎤 ตอนนี้อยู่ในโหมด Showtime\n"
-            f"event: {event_name}\n"
-            f"วันที่จัดแสดง: {show_date}\n"
-            f"state: {action}"
-        )
+        return "🎤 ตอนนี้อยู่ในโหมด Showtime"
     return "📋 ตอนนี้อยู่ในโหมดปกติ"
 
 # =================================================================
@@ -1196,8 +1188,9 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, build_report_flex(title="✏️ เลือกรายการแก้ไข", subtitle="พิมพ์: edit [ID] [ยอดใหม่]", lines=lines_edit, alt_text="แก้ไขรายการ"))
         return
 
-    if text.startswith("ทริป ") or text_lower.startswith("trip "):
-        trip_name = text[5:].strip() if text.startswith("ทริป ") else text[5:].strip()
+    trip_match = re.match(r"^(ทริป|trip)\s+(.+)$", text, re.IGNORECASE)
+    if trip_match:
+        trip_name = trip_match.group(2).strip()
         if not trip_name:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป"))
             return
