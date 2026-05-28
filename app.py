@@ -1074,7 +1074,7 @@ def handle_text(event):
         clear_state(user_id)
         threading.Thread(
             target=process_slip_with_payer,
-            args=(state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, participants, slip_tag, slip_currency or state.get("base_currency"))
+            args=(state.get("message_ids") or [state.get("message_id")], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, participants, slip_tag, slip_currency or state.get("base_currency"))
         ).start()
         return
 
@@ -1820,39 +1820,78 @@ def handle_image(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
         return
     base_currency = get_trip_base_currency(trip)
-    set_state(user_id, {"action": "wait_slip_payer", "message_id": event.message.id, "trip_id": trip['id'], "group_id": group_id, "base_currency": base_currency})
-    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🧾 พบสลิป/บิล\nกรุณาพิมพ์ #หมวด ตามด้วยชื่อคนที่ต้องรับผิดชอบยอดนี้\nเช่น #ค่าเครื่องดื่ม บอล ปาค\nถ้าสกุลเงินไม่ใช่ {base_currency} ให้ใส่ต่อท้าย เช่น #ค่าอาหาร บอล ปาค JPY"))
+    if state and state.get("action") == "wait_slip_payer" and state.get("trip_id") == trip.get("id"):
+        message_ids = state.get("message_ids") or [state.get("message_id")]
+        message_ids = [mid for mid in message_ids if mid]
+        message_ids.append(event.message.id)
+        state["message_ids"] = message_ids
+        state["message_id"] = message_ids[-1]
+        set_state(user_id, state)
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🧾 รับสลิปเพิ่มแล้ว (รวม {len(message_ids)} ใบ)\nพิมพ์ #หมวด ตามด้วยรายชื่อ เช่น #ค่าเครื่องดื่ม บอล ปาค"))
+        return
+    set_state(user_id, {"action": "wait_slip_payer", "message_ids": [event.message.id], "message_id": event.message.id, "trip_id": trip['id'], "group_id": group_id, "base_currency": base_currency})
+    line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🧾 พบสลิป/บิล\nส่งเพิ่มได้หลายรูป แล้วค่อยพิมพ์ #หมวด ตามด้วยชื่อคนที่ต้องรับผิดชอบยอดนี้\nเช่น #ค่าเครื่องดื่ม บอล ปาค\nถ้าสกุลเงินไม่ใช่ {base_currency} ให้ใส่ต่อท้าย เช่น #ค่าอาหาร บอล ปาค JPY"))
 
-def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants, slip_tag=None, slip_currency=None):
+def process_slip_with_payer(message_ids, trip_id, user_id, group_id, reply_token, payer_name, participants, slip_tag=None, slip_currency=None):
     if not vision_client or not supabase: return
-    try:
-        message_content = line_bot_api.get_message_content(message_id)
-        image_bytes = b''.join(message_content.iter_content())
-        response = vision_client.text_detection(image=vision.Image(content=image_bytes))
-        text_detected = response.text_annotations[0].description if response.text_annotations else ""
-        amount = extract_amount(text_detected)
-        if amount:
-            try:
-                timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
-                final_tag = slip_tag or "#สลิป"
-                final_currency = _normalize_currency(slip_currency) or "THB"
-                amount_thb, rate_used, rate_source = compute_amount_thb_with_source(amount, final_currency)
-                result = supabase.table("expenses").insert({"trip_id": trip_id, "line_user_id": payer_name, "created_by_user_id": user_id, "payer_name": payer_name, "amount": amount, "amount_thb": amount_thb, "exchange_rate_used": rate_used, "exchange_rate_source": rate_source, "item_name": f"บิล {timestamp}", "currency": final_currency, "tag": final_tag, "participants": participants, "slip_url": f"slip_{message_id}"}).execute()
-                new_id = result.data[0]['id'] if result.data else None
-                ppl_txt = " ".join(participants or [])
-                curr_txt = f" {final_currency}" if final_currency != "THB" else " บาท"
-                thb_txt = f"\nเทียบบาท: {amount_thb:,.2f} บาท" if final_currency != "THB" else ""
-                success_msg = f"✅ บันทึก {amount:,.2f}{curr_txt} ({final_tag}){thb_txt}\nรายชื่อ: {ppl_txt}"
-                if new_id: success_msg += f"\nถ้ายอดผิด แก้ไข: edit {new_id:04d} {amount}"
-                line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
-            except Exception as db_err:
-                logger.error(f"Save slip expense error: {db_err}")
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ อ่านยอดจากสลิปได้แล้ว แต่บันทึกลงระบบไม่สำเร็จ"))
-        else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในรูป\n📌 ลองบันทึกด้วยข้อความ เช่น 'ค่าเบียร์ 500 บาท #เครื่องดื่ม บอล ปาค'"))
-    except Exception as e:
-        logger.error(f"Process slip OCR error: {e}")
-        line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้"))
+    message_ids = [mid for mid in (message_ids if isinstance(message_ids, list) else [message_ids]) if mid]
+    saved_items = []
+    failed_items = []
+    final_tag = slip_tag or "#สลิป"
+    final_currency = _normalize_currency(slip_currency) or "THB"
+
+    for idx, message_id in enumerate(message_ids, 1):
+        try:
+            message_content = line_bot_api.get_message_content(message_id)
+            image_bytes = b''.join(message_content.iter_content())
+            response = vision_client.text_detection(image=vision.Image(content=image_bytes))
+            text_detected = response.text_annotations[0].description if response.text_annotations else ""
+            amount = extract_amount(text_detected)
+        except Exception as ocr_err:
+            logger.error(f"Process slip OCR error: {ocr_err}")
+            failed_items.append(f"ใบที่ {idx}: อ่านรูปไม่ได้")
+            continue
+        if not amount:
+            failed_items.append(f"ใบที่ {idx}: ไม่พบจำนวนเงิน")
+            continue
+        try:
+            timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
+            amount_thb, rate_used, rate_source = compute_amount_thb_with_source(amount, final_currency)
+            result = supabase.table("expenses").insert({"trip_id": trip_id, "line_user_id": payer_name, "created_by_user_id": user_id, "payer_name": payer_name, "amount": amount, "amount_thb": amount_thb, "exchange_rate_used": rate_used, "exchange_rate_source": rate_source, "item_name": f"บิล {timestamp}", "currency": final_currency, "tag": final_tag, "participants": participants, "slip_url": f"slip_{message_id}"}).execute()
+            new_id = result.data[0]['id'] if result.data else None
+            saved_items.append({"idx": idx, "id": new_id, "amount": amount, "amount_thb": amount_thb})
+        except Exception as db_err:
+            logger.error(f"Save slip expense error: {db_err}")
+            failed_items.append(f"ใบที่ {idx}: บันทึกไม่สำเร็จ")
+
+    if not saved_items:
+        fail_text = "\n".join(failed_items) if failed_items else "ไม่สามารถอ่านรูปได้"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=f"❌ ไม่สามารถบันทึกสลิปได้\n{fail_text}"))
+        return
+
+    total_amount = sum(item["amount"] for item in saved_items)
+    total_thb = sum(item["amount_thb"] for item in saved_items)
+    curr_txt = final_currency if final_currency != "THB" else "บาท"
+    ppl_txt = " ".join(participants or [])
+    if len(saved_items) == 1:
+        item = saved_items[0]
+        success_msg = f"✅ บันทึก {item['amount']:,.2f} {curr_txt} ({final_tag})"
+    else:
+        success_msg = f"✅ บันทึกสลิป {len(saved_items)} ใบ ({final_tag})\nรวม: {total_amount:,.2f} {curr_txt}"
+        for item in saved_items:
+            success_msg += f"\n{item['idx']}. {item['amount']:,.2f} {curr_txt}"
+    if final_currency != "THB":
+        success_msg += f"\nเทียบบาท: {total_thb:,.2f} บาท"
+    success_msg += f"\nรายชื่อ: {ppl_txt}"
+    edit_lines = []
+    for item in saved_items:
+        if item["id"]:
+            edit_lines.append(f"edit {item['id']:04d} {item['amount']}")
+    if edit_lines:
+        success_msg += "\nถ้ายอดผิด แก้ไข:\n" + "\n".join(edit_lines)
+    if failed_items:
+        success_msg += "\n\n⚠️ บางใบไม่สำเร็จ:\n" + "\n".join(failed_items)
+    line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
 
 # =================================================================
 # Dashboard Routes
