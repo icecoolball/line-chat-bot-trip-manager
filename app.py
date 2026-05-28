@@ -119,7 +119,7 @@ def build_main_menu_flex():
                 spacing='sm',
                 flex=0,
                 contents=[
-                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='🚀 สร้างทริป', text='ทริป ')),
+                    ButtonComponent(style='primary', color='#1DB446', height='md', action=MessageAction(label='🚀 สร้างทริป', text='ทริป')),
                     ButtonComponent(style='secondary', height='md', action=MessageAction(label='💰 ยอดรวม', text='ยอด')),
                     ButtonComponent(style='secondary', height='md', action=MessageAction(label='✏️ แก้ไข', text='edit')),
                     ButtonComponent(style='secondary', height='md', action=MessageAction(label='🎤 Showtime', text='showtime')),
@@ -842,6 +842,11 @@ def handle_text(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=build_state_text(state)))
         return
 
+    if text in ["ทริป"] or text_lower == "trip":
+        set_state(user_id, {"action": "wait_trip_name"})
+        line_bot_api.reply_message(reply_token, TextSendMessage(text="กรุณาระบุชื่อทริป"))
+        return
+
     if text in ["menu showtime", "showtime menu"]:
         if state and state.get("action") in SHOWTIME_ACTIONS:
             line_bot_api.reply_message(reply_token, build_showtime_menu_flex(state.get("show_date")))
@@ -886,6 +891,29 @@ def handle_text(event):
             line_bot_api.reply_message(reply_token, TextSendMessage(text=f"✅ บันทึก {state['amount']:,.2f}{curr_txt}{tag_txt}\nจ่าย: {state['payer_name']}\nหาร: {ppl_txt}"))
         except Exception as e: logger.error(f"Save expense error: {e}")
         clear_state(user_id)
+        return
+
+    if state and state.get("action") == "wait_trip_name":
+        if text in ["เมนู", "menu", "help"]:
+            line_bot_api.reply_message(reply_token, build_main_menu_flex())
+            return
+        if text in ["ยกเลิก", "cancel", "exit", "ออก"]:
+            clear_state(user_id)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกการสร้างทริปแล้ว"))
+            return
+        trip_name = text.strip()
+        if not trip_name:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาระบุชื่อทริป"))
+            return
+        if not supabase: return
+        try:
+            supabase.table("trips").update({"status": "closed"}).eq("creator_id", user_id).execute()
+            supabase.table("trips").insert({"title": trip_name, "status": "active", "line_group_id": group_id, "creator_id": user_id}).execute()
+            clear_state(user_id)
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=f"🚀 เริ่มทริปใหม่: {trip_name} เรียบร้อย!"))
+        except Exception as e:
+            logger.error(f"Create trip error: {e}")
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="สร้างทริปไม่สำเร็จ"))
         return
 
     # --- Showtime Mode Handling ---
@@ -1302,7 +1330,7 @@ def handle_text(event):
     # guard: ห้าม parse expense ขณะรอ input หรืออยู่ใน state อื่น
     SLIP_STATES = {"wait_slip_payer", "wait_slip_participants", "wait_expense_participants",
                    "showtime_mode", "wait_showtime_add_confirm", "wait_showtime_event_name", "wait_showtime_date",
-                   "wait_end_showtime_event_index", "wait_end_showtime_confirm", "end_trip",
+                   "wait_end_showtime_event_index", "wait_end_showtime_confirm", "wait_trip_name", "end_trip",
                    "edit_selection", "edit_amount", "stop_event", "export_history"}
     trip = get_active_trip(user_id, group_id)
     if trip and not (state and state.get("action") in SLIP_STATES):
