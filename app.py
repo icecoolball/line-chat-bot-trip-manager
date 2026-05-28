@@ -410,6 +410,9 @@ def parse_enhanced_expense(text, default_payer_name=None):
         if maybe_curr:
             currency = maybe_curr
             after_amt_idx += 1
+        elif parts[after_amt_idx] in ["บาท", "บ.", "baht"]:
+            currency = "THB"
+            after_amt_idx += 1
 
     tag = None
     if after_amt_idx < len(parts) and parts[after_amt_idx].startswith("#"):
@@ -436,6 +439,25 @@ def parse_enhanced_expense(text, default_payer_name=None):
     if not item: item = "ค่าใช้จ่าย"
 
     return payer, item, amt_val, currency, tag, participants
+
+def parse_slip_assignment_text(text, user_id=None, group_id=None):
+    raw = (text or "").strip()
+    if not raw:
+        return None, None, None
+    tokens = [t.strip() for t in raw.split() if t.strip()]
+    tag = None
+    participants = []
+    for token in tokens:
+        if token.startswith("#") and not tag:
+            tag = token
+            continue
+        participants.append(token)
+    if not participants:
+        return None, None, tag
+    if len(participants) == 1 and participants[0].lower() in ["ฉัน", "ฉันเอง", "me"]:
+        display_name = get_display_name(user_id, group_id) if user_id else participants[0]
+        return display_name, [display_name], tag
+    return " ".join(participants), participants, tag
 
 def extract_amount(text):
     if not text: return None
@@ -882,18 +904,14 @@ def handle_text(event):
         if not raw_text:
             line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ชื่ออย่างน้อย 1 คน"))
             return
-        if raw_text.lower() in ["ฉัน", "ฉันเอง", "me"]:
-            payer_name = get_display_name(user_id, state.get('group_id'))
-            participants = [payer_name]
-        else:
-            participants = [n.strip() for n in raw_text.split() if n.strip()]
-            if not participants:
-                line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ชื่ออย่างน้อย 1 คน"))
-                return
-            payer_name = raw_text
+        payer_name, participants, slip_tag = parse_slip_assignment_text(raw_text, user_id, state.get("group_id"))
+        if not payer_name or not participants:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ กรุณาพิมพ์ชื่ออย่างน้อย 1 คน"))
+            return
+        clear_state(user_id)
         threading.Thread(
             target=process_slip_with_payer,
-            args=(state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, participants)
+            args=(state["message_id"], state["trip_id"], user_id, state.get("group_id"), reply_token, payer_name, participants, slip_tag)
         ).start()
         return
 
@@ -1611,9 +1629,9 @@ def handle_image(event):
         line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่มีทริปที่กำลังทำงานอยู่"))
         return
     set_state(user_id, {"action": "wait_slip_payer", "message_id": event.message.id, "trip_id": trip['id'], "group_id": group_id})
-    line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\nกรุณาพิมพ์ชื่อคนที่ต้องรับผิดชอบยอดนี้\nเช่น บอล ปาค\n(หรือพิมพ์ 'ฉัน' เพื่อใช้ชื่อคุณ)"))
+    line_bot_api.reply_message(reply_token, TextSendMessage(text="🧾 พบสลิป/บิล\nกรุณาพิมพ์ #หมวด ตามด้วยชื่อคนที่ต้องรับผิดชอบยอดนี้\nเช่น #ค่าเครื่องดื่ม บอล ปาค\n(หรือพิมพ์ '#ทั่วไป ฉัน' เพื่อใช้ชื่อคุณ)"))
 
-def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants):
+def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token, payer_name, participants, slip_tag=None):
     if not vision_client or not supabase: return
     try:
         message_content = line_bot_api.get_message_content(message_id)
@@ -1622,17 +1640,22 @@ def process_slip_with_payer(message_id, trip_id, user_id, group_id, reply_token,
         text_detected = response.text_annotations[0].description if response.text_annotations else ""
         amount = extract_amount(text_detected)
         if amount:
-            timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
-            result = supabase.table("expenses").insert({"trip_id": trip_id, "line_user_id": user_id, "payer_name": payer_name, "amount": amount, "item_name": f"บิล {timestamp}", "currency": "THB", "tag": "#สลิป", "participants": participants, "slip_url": f"slip_{message_id}"}).execute()
-            new_id = result.data[0]['id'] if result.data else None
-            ppl_txt = " ".join(participants or [])
-            success_msg = f"✅ บันทึก {amount:,.2f} บาท (#สลิป)\nจ่าย: {payer_name}\nหาร: {ppl_txt}"
-            if new_id: success_msg += f"\n✏️ แก้ไข: edit {new_id:04d} {amount}"
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
+            try:
+                timestamp = datetime.now().strftime('%d/%m/%y %H:%M:%S')
+                final_tag = slip_tag or "#สลิป"
+                result = supabase.table("expenses").insert({"trip_id": trip_id, "line_user_id": user_id, "payer_name": payer_name, "amount": amount, "item_name": f"บิล {timestamp}", "currency": "THB", "tag": final_tag, "participants": participants, "slip_url": f"slip_{message_id}"}).execute()
+                new_id = result.data[0]['id'] if result.data else None
+                ppl_txt = " ".join(participants or [])
+                success_msg = f"✅ บันทึก {amount:,.2f} บาท ({final_tag})\nจ่าย: {payer_name}\nหาร: {ppl_txt}"
+                if new_id: success_msg += f"\n✏️ แก้ไข: edit {new_id:04d} {amount}"
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=success_msg))
+            except Exception as db_err:
+                logger.error(f"Save slip expense error: {db_err}")
+                line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ อ่านยอดจากสลิปได้แล้ว แต่บันทึกลงระบบไม่สำเร็จ"))
         else:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในรูป\n📌 ลองบันทึกด้วยข้อความ เช่น 'บอล ค่าเหล้า 500'"))
+            line_bot_api.reply_message(reply_token, TextSendMessage(text="⚠️ ไม่พบจำนวนเงินในรูป\n📌 ลองบันทึกด้วยข้อความ เช่น 'ค่าเบียร์ 500 บาท #เครื่องดื่ม บอล ปาค'"))
     except Exception as e:
-        logger.error(f"Process slip with payer error: {e}")
+        logger.error(f"Process slip OCR error: {e}")
         line_bot_api.reply_message(reply_token, TextSendMessage(text="❌ ไม่สามารถอ่านรูปได้"))
 
 # =================================================================
