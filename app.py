@@ -418,8 +418,8 @@ def format_trip_currency_summary(total_thb, target_currency, label="รวม"):
         return [f"💵 {label}: {float(total_thb or 0):,.2f} บาท"]
     total_target, rate = convert_thb_to_currency(total_thb, target)
     return [
-        f"💵 {label}: {total_target:,.2f} {target}",
-        f"เทียบบาท: {float(total_thb or 0):,.2f} บาท",
+        f"💵 {label}: {float(total_thb or 0):,.2f} บาท",
+        f"เทียบ {target}: {total_target:,.2f} {target}",
         f"เรท: 1 THB = {rate:.4f} {target}",
     ]
 
@@ -816,20 +816,20 @@ def build_end_trip_summary(trip, currency_code):
         for name, amount_due in sorted(member_totals.items()):
             total_by_person[name] = total_by_person.get(name, 0.0) + amount_due
             if currency_code != "THB" and exchange_rate != 1:
-                msg += f"• {name}: {amount_due * exchange_rate:,.2f} {currency_code} (เทียบบาท {amount_due:,.2f} บาท)\n"
+                msg += f"• {name}: {amount_due:,.2f} บาท (≈ {amount_due * exchange_rate:,.2f} {currency_code})\n"
             else:
                 msg += f"• {name}: {amount_due:,.2f} บาท\n"
         msg += "--------------------------------\n"
 
     if currency_code != "THB" and exchange_rate != 1:
-        msg += f"💵 ยอดรวมที่ต้องจ่ายทั้งทริป: {total_thb * exchange_rate:,.2f} {currency_code}\n"
-        msg += f"เทียบบาท: {total_thb:,.2f} บาท"
+        msg += f"💵 ยอดรวมที่ต้องจ่ายทั้งทริป: {total_thb:,.2f} บาท\n"
+        msg += f"เทียบ {currency_code}: {total_thb * exchange_rate:,.2f} {currency_code}"
     else:
         msg += f"💵 ยอดรวมที่ต้องจ่ายทั้งทริป: {total_thb:,.2f} บาท"
     msg += "\n"
     for name, amount_due in sorted(total_by_person.items()):
         if currency_code != "THB" and exchange_rate != 1:
-            msg += f"• {name}: {amount_due * exchange_rate:,.2f} {currency_code} (เทียบบาท {amount_due:,.2f} บาท)\n"
+            msg += f"• {name}: {amount_due:,.2f} บาท (≈ {amount_due * exchange_rate:,.2f} {currency_code})\n"
         else:
             msg += f"• {name}: {amount_due:,.2f} บาท\n"
     return msg, currency_code
@@ -1064,8 +1064,10 @@ def daily_summary_cron():
             for tag, data in sorted(categories.items()):
                 ppl_str = " ".join(sorted(data['participants']))
                 category_total, _ = convert_thb_to_currency(data['total_thb'], base_currency)
-                unit = "บาท" if base_currency == "THB" else base_currency
-                msg += f"{tag} {category_total:,.0f} {unit} ({ppl_str})\n"
+                msg += f"{tag} {data['total_thb']:,.0f} บาท ({ppl_str})"
+                if base_currency != "THB":
+                    msg += f" ≈ {category_total:,.0f} {base_currency}"
+                msg += "\n"
 
             target = trip.get('line_group_id') or trip.get('creator_id')
             if target:
@@ -1554,8 +1556,10 @@ def handle_text(event):
         for tag, data in sorted(categories.items()):
             ppl_str = " ".join(sorted(data['participants']))
             category_total, _ = convert_thb_to_currency(data['total'], base_currency)
-            unit = "บาท" if base_currency == "THB" else base_currency
-            lines.append(f"{tag} {category_total:,.0f} {unit} {ppl_str}")
+            line = f"{tag} {data['total']:,.0f} บาท {ppl_str}"
+            if base_currency != "THB":
+                line += f" (≈ {category_total:,.0f} {base_currency})"
+            lines.append(line)
         line_bot_api.reply_message(reply_token, build_report_flex(title="💰 ยอดรวมทริป", subtitle=None, lines=lines, alt_text="ยอดรวม"))
         return
 
@@ -1603,9 +1607,8 @@ def handle_text(event):
         for tag, data in sorted(categories.items()):
             ppl_str = " ".join(sorted(data['participants']))
             category_total = data['total_thb'] * rate_to_target
-            unit = "บาท" if target_curr == "THB" else target_curr
-            line = f"{tag} {category_total:,.0f} {unit} {ppl_str}"
-            if target_curr != "THB": line += f" (เทียบบาท {data['total_thb']:,.2f} บาท)"
+            line = f"{tag} {data['total_thb']:,.0f} บาท {ppl_str}"
+            if target_curr != "THB": line += f" (≈ {category_total:,.0f} {target_curr})"
             lines.append(line)
         line_bot_api.reply_message(reply_token, build_report_flex(title=f"📅 ยอดวันนี้ ({today_str})", subtitle="\n".join(subtitle_parts), lines=lines, alt_text="ยอดวันนี้"))
         return
