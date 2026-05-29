@@ -307,6 +307,38 @@ def build_showtime_command_text():
         "- cancel"
     )
 
+def build_help_text():
+    return (
+        "📌 คำสั่งทั้งหมด\n\n"
+        "โหมดปกติ\n"
+        "menu / เมนู : เปิดเมนูหลัก\n"
+        "help : ดูคำสั่งทั้งหมด\n"
+        "state : เช็กว่าอยู่โหมดไหน\n"
+        "trip [ชื่อทริป] / ทริป [ชื่อทริป] : สร้างทริปใหม่\n"
+        "event : จัดการอีเวนต์/รายการซื้อบัตร\n"
+        "ยอด / sum : ดูยอดรวมทริป\n"
+        "ยอดวันนี้ : ดูยอดของวันนี้\n"
+        "edit [id] [ยอด] : แก้ไขยอดรายการ\n"
+        "history / ประวัติ : ดูประวัติทริปล่าสุด\n"
+        "excel [เลข] : export ทริปจาก history\n"
+        "end trip / จบทริป : ปิดทริปและสรุปยอด\n"
+        "showtime : เข้าเมนูจัดการ Showtime\n\n"
+        "โหมด Showtime\n"
+        "menu showtime : เปิดเมนู Showtime แบบ Flex\n"
+        "showtime : ดูตารางของ event ปัจจุบัน\n"
+        "showtime [เลข] : ดูตารางจากรายการ event\n"
+        "เพิ่ม / add showtime : เพิ่ม Showtime event ใหม่\n"
+        "edit showtime : แก้ไขข้อความตาราง Showtime\n"
+        "end showtime : เลือก event ที่ต้องการลบ\n"
+        "end showtime [เลข] : ลบ event ตามเลขที่เลือก\n"
+        "save : บันทึกและออกจากโหมด Showtime\n"
+        "exit / cancel : ออกจากโหมด Showtime"
+    )
+
+def clean_display_text(value):
+    text = str(value or "").replace("\ufeff", "").replace("ï»¿", "")
+    return re.sub(r"^[^A-Za-z0-9ก-ฮะ-์เ-ไใโแ#]+", "", text).strip() or "-"
+
 def sort_showtime_by_time(schedule):
     def get_sort_key(item):
         time_str = item.get("time", "00:00").split('-')[0]
@@ -1175,8 +1207,11 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_trip_name":
-        if text in ["เมนู", "menu", "help"]:
+        if text in ["เมนู", "menu"]:
             line_bot_api.reply_message(reply_token, build_main_menu_flex())
+            return
+        if text_lower == "help":
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_help_text()))
             return
         if text in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1191,6 +1226,12 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_trip_currency":
+        if text in ["เมนู", "menu"]:
+            line_bot_api.reply_message(reply_token, build_main_menu_flex())
+            return
+        if text_lower == "help":
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_help_text()))
+            return
         if text in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
             line_bot_api.reply_message(reply_token, TextSendMessage(text="✅ ยกเลิกการสร้างทริปแล้ว"))
@@ -1240,8 +1281,11 @@ def handle_text(event):
             return
 
         # --- menu/help/exit ต้อง bypass ทุก state ใน showtime_mode (รวม edit_mode) ---
-        if text in ["เมนู", "menu", "help"]:
+        if text in ["เมนู", "menu"]:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
+            return
+        if text_lower == "help":
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_help_text()))
             return
 
         if text_lower in ["exit", "ออก"]:
@@ -1382,8 +1426,11 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_add_confirm":
-        if text in ["เมนู", "menu", "help"]:
+        if text in ["เมนู", "menu"]:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
+            return
+        if text_lower == "help":
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_help_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1432,8 +1479,11 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_event_name":
-        if text in ["เมนู", "menu", "help"]:
+        if text in ["เมนู", "menu"]:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
+            return
+        if text_lower == "help":
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_help_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1448,8 +1498,11 @@ def handle_text(event):
         return
 
     if state and state.get("action") == "wait_showtime_date":
-        if text in ["เมนู", "menu", "help"]:
+        if text in ["เมนู", "menu"]:
             line_bot_api.reply_message(reply_token, TextSendMessage(text=build_showtime_command_text()))
+            return
+        if text_lower == "help":
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=build_help_text()))
             return
         if text_lower in ["ยกเลิก", "cancel", "exit", "ออก"]:
             clear_state(user_id)
@@ -1470,8 +1523,12 @@ def handle_text(event):
         return
 
     # --- Normal Commands ---
-    if text in ["เมนู", "menu", "help"]:
+    if text in ["เมนู", "menu"]:
         line_bot_api.reply_message(reply_token, build_main_menu_flex())
+        return
+
+    if text_lower == "help":
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=build_help_text()))
         return
 
     if text_lower in ["exit", "ออก"]:
@@ -1701,10 +1758,11 @@ def handle_text(event):
                 return
             msg = "📜 ประวัติทริป (10 ทริปล่าสุด):\n\n"
             for i, trip in enumerate(all_trips, 1):
-                status_icon = "๐ข" if trip['status'] == 'active' else "๐”ด"
+                status_icon = "🟢" if trip['status'] == 'active' else "🔴"
+                trip_title = clean_display_text(trip.get('title'))
                 start_date = trip.get('created_at', '')[:10]
                 end_date = trip.get('updated_at', '')[:10] if trip['status'] == 'closed' else "ยังไม่จบ"
-                msg += f"{i}. {status_icon} {trip['title']}\n   📅 {start_date} → {end_date}\n   👉 พิมพ์: excel {i}\n\n"
+                msg += f"{i}. {status_icon} {trip_title}\n   📅 {start_date} → {end_date}\n   👉 พิมพ์: excel {i}\n\n"
             set_state(user_id, {"action": "export_history", "trips": all_trips})
             line_bot_api.reply_message(reply_token, TextSendMessage(text=msg))
         except Exception as e:
