@@ -1,7 +1,6 @@
-name: Showtime Check Cron
+name: Showtime Check Manual Trigger
+
 on:
-  schedule:
-    - cron: '2533IceCoolB@llZ' # ทำงานทุก 1 นาที
   workflow_dispatch:
 
 jobs:
@@ -10,6 +9,6 @@ jobs:
     steps:
       - name: Trigger Showtime Check API
         run: |
-          curl -X POST https://web-production-3120c7.up.railway.app/api/check-showtime \
+          curl -X POST "${{ secrets.WORKER_BASE_URL }}/api/check-showtime" \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             -H "Content-Type: application/json"

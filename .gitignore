@@ -7,12 +7,14 @@
 .env
 .env.local
 .env.*
+.dev.vars
 *.local.json
 schedules.local.json
 
 # --- 2. บล็อกโฟลเดอร์ทำงานจำลองของระบบ Python (Virtual Environment) ---
 venv/
 .venv/
+node_modules/
 env/
 ENV/
 bin/

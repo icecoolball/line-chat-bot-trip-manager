@@ -1,0 +1,13 @@
+name = "line-trip-bot"
+main = "src/worker.ts"
+compatibility_date = "2026-06-01"
+account_id = "d590fcbc1a1698d15cac67c1cb8a82ab"
+workers_dev = true
+preview_urls = false
+
+[triggers]
+crons = ["* * * * *", "0 2 * * *"]
+
+[vars]
+GITHUB_WORKFLOW_REF = "main"
+GITHUB_WORKFLOW_ID = "export-trip.yml"
