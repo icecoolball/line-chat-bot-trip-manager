@@ -138,7 +138,7 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
   if (lower.startsWith("trip ") || text.startsWith("ทริป ")) {
     const name = text.replace(/^trip\s+/i, "").replace(/^ทริป\s+/, "").trim();
     await setState(env, userId, groupId, "wait_trip_currency", { trip_name: name });
-    return reply(env, replyToken, "ระบุสกุลเงินหลักของทริป เช่น THB / JPY / USD / KRW");
+    return reply(env, replyToken, "ระบุประเทศของทริป เช่น ญี่ปุ่น / เกาหลี หรือพิมพ์รหัสสกุลเงิน เช่น JPY");
   }
 
   if (state?.action === "wait_slip_confirm") return handleSlipConfirm(text, userId, replyToken, state, env);
@@ -178,12 +178,12 @@ async function handleTripName(text: string, userId: string, groupId: string | nu
   }
   if (!text) return reply(env, replyToken, "กรุณาระบุชื่อทริป");
   await setState(env, userId, groupId, "wait_trip_currency", { trip_name: text });
-  return reply(env, replyToken, "ระบุสกุลเงินหลักของทริป เช่น THB / JPY / USD / KRW");
+  return reply(env, replyToken, "ระบุประเทศของทริป เช่น ญี่ปุ่น / เกาหลี หรือพิมพ์รหัสสกุลเงิน เช่น JPY");
 }
 
 async function handleTripCurrency(text: string, userId: string, groupId: string | null, replyToken: string, state: BotState, env: Env): Promise<void> {
-  const currency = normalizeCurrency(text);
-  if (!currency) return reply(env, replyToken, "ไม่รู้จักสกุลเงินนี้ ตัวอย่าง: THB / JPY / USD / KRW");
+  const currency = resolveBaseCurrency(text);
+  if (!currency) return reply(env, replyToken, "ไม่รู้จักประเทศ/สกุลเงินนี้ ลองพิมพ์ชื่อประเทศ เช่น ญี่ปุ่น หรือรหัสสกุล เช่น JPY");
   const tripName = String(state.payload.trip_name || "").trim();
   await supabasePatch(env, "trips", { status: "closed" }, [`creator_id=eq.${encodeURIComponent(userId)}`]);
   await supabaseInsert(env, "trips", { title: tripName, status: "active", line_group_id: groupId, creator_id: userId, base_currency: currency });
@@ -739,8 +739,12 @@ function parseExpense(text: string, defaultPayer: string, defaultCurrency = "THB
   if (amtIdx < 0) return null;
   const amount = Number(parts[amtIdx].replace(/,/g, ""));
   let cursor = amtIdx + 1;
-  let currency = normalizeCurrency(parts[cursor] || "") || normalizeCurrency(defaultCurrency) || "THB";
-  if (normalizeCurrency(parts[cursor] || "")) cursor++;
+  const inlineCurrency = normalizeCurrency(parts[cursor] || "");
+  const fallbackCurrency = ISO_4217.has(normalizeCurrencyCode(defaultCurrency))
+    ? normalizeCurrencyCode(defaultCurrency)
+    : "THB";
+  let currency = inlineCurrency || fallbackCurrency;
+  if (inlineCurrency) cursor++;
   let tag: string | null = null;
   if ((parts[cursor] || "").startsWith("#")) tag = parts[cursor++];
   const people = parts.slice(cursor);
@@ -784,7 +788,8 @@ export function resolveBaseCurrency(input: string): string | null {
 }
 
 function getTripBaseCurrency(trip: Trip | null): string {
-  return normalizeCurrency(trip?.base_currency || trip?.currency_code) || "THB";
+  const raw = normalizeCurrencyCode(trip?.base_currency || trip?.currency_code);
+  return ISO_4217.has(raw) ? raw : "THB";
 }
 
 async function computeAmountThb(amount: number, currency: string): Promise<{ amount: number; rate: number; source: string }> {
