@@ -18,7 +18,7 @@ const CURRENCY_ALIASES: Record<string, string> = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-export function normalizeCountryName(input: string): string {
+export function normalizeCountryName(input: string | null | undefined): string {
   return String(input || "")
     .trim()
     .toLowerCase()
