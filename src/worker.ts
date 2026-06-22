@@ -793,6 +793,53 @@ async function computeAmountThb(amount: number, currency: string): Promise<{ amo
   return { amount: amount * (CURRENCY_RATES[curr] || 1), rate: CURRENCY_RATES[curr] || 1, source: "fallback" };
 }
 
+const FX_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+
+async function fetchLiveRateThb(currency: string): Promise<number | null> {
+  try {
+    const res = await fetchWithTimeout(
+      `https://open.er-api.com/v6/latest/${currency}`,
+      { method: "GET" },
+      5000,
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { result?: string; rates?: Record<string, number> };
+    if (data?.result !== "success") return null;
+    const rate = data.rates?.THB;
+    return typeof rate === "number" && rate > 0 ? rate : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getRateThb(env: Env, currency: string): Promise<number> {
+  const curr = normalizeCurrencyCode(currency);
+  if (curr === "THB" || !curr) return 1;
+
+  const rows = await supabaseSelect<any>(env, "fx_rates", "*", [`currency=eq.${curr}`]);
+  const cached = rows?.[0];
+  if (cached && Date.now() - Date.parse(cached.updated_at) < FX_CACHE_TTL_MS) {
+    return Number(cached.rate_thb);
+  }
+
+  const live = await fetchLiveRateThb(curr);
+  if (live) {
+    await supabaseUpsert(env, "fx_rates",
+      { currency: curr, rate_thb: live, updated_at: new Date().toISOString() }, "currency");
+    return live;
+  }
+
+  if (cached) return Number(cached.rate_thb);
+  return FALLBACK_RATES[curr] ?? 1;
+}
+
+async function getRatesForCurrencies(env: Env, currencies: string[]): Promise<Map<string, number>> {
+  const distinct = Array.from(new Set(currencies.map((c) => normalizeCurrencyCode(c) || "THB")));
+  const map = new Map<string, number>();
+  for (const c of distinct) map.set(c, await getRateThb(env, c));
+  return map;
+}
+
 function getExpenseAmountThb(exp: Expense): number {
   return Number(exp.amount_thb ?? exp.amount ?? 0);
 }
