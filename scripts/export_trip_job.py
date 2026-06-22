@@ -11,8 +11,22 @@ from supabase import create_client
 # เรทเทียบบาทแบบคงที่ (fallback สุดท้ายถ้าดึงเรทเรียลไทม์ไม่ได้) — ตรงกับ src/worker.ts
 CURRENCY_RATES = {"THB": 1.0, "JPY": 0.23, "USD": 34.5, "KRW": 0.025}
 
+# map สกุลเงินที่สะกดผิด/ใช้ตัวย่อไม่มาตรฐาน ให้เป็นรหัส ISO ที่ถูกต้อง
+CURRENCY_ALIASES = {
+    "JYP": "JPY", "JPN": "JPY", "YEN": "JPY", "¥": "JPY",
+    "WON": "KRW", "₩": "KRW",
+    "USD$": "USD", "$": "USD",
+    "฿": "THB", "BAHT": "THB",
+}
+
 # cache เรทเรียลไทม์ต่อการรัน 1 ครั้ง: สกุล -> เรทเทียบบาท (None = ดึงไม่ได้)
 _FX_CACHE = {}
+
+
+def normalize_currency(value):
+    """แปลงค่าสกุลเงินให้เป็นรหัสมาตรฐาน (แก้คำสะกดผิด เช่น JYP -> JPY)."""
+    curr = (value or "THB").strip().upper()
+    return CURRENCY_ALIASES.get(curr, curr)
 
 
 def fetch_fx_rate_to_thb(currency):
@@ -56,15 +70,18 @@ def as_float(value):
 def compute_thb(amount, currency):
     """คืน (amount_thb, rate, source) โดยดึงเรทเรียลไทม์ตอน export ทุกแถว
     ถ้าดึงไม่ได้ค่อย fallback เป็นเรทคงที่."""
-    curr = (currency or "THB").upper()
+    curr = normalize_currency(currency)
     amount_val = as_float(amount) or 0.0
     if curr == "THB":
         return round(amount_val, 2), 1.0, "same_currency"
     live_rate = fetch_fx_rate_to_thb(curr)
     if live_rate:
         return round(amount_val * live_rate, 2), live_rate, "er-api_export"
-    rate = CURRENCY_RATES.get(curr, 1.0)
-    return round(amount_val * rate, 2), rate, "fallback_export"
+    rate = CURRENCY_RATES.get(curr)
+    if rate:
+        return round(amount_val * rate, 2), rate, "fallback_export"
+    # ไม่รู้จักสกุลนี้และดึงเรทไม่ได้ -> ไม่แปลง (กันได้เรท 1 มั่ว ๆ)
+    return round(amount_val, 2), None, "unknown_currency"
 
 
 def thai_dt_text(value):
@@ -125,7 +142,7 @@ def main():
             participants = exp.get("participants") or []
             if isinstance(participants, str):
                 participants = [p.strip() for p in participants.split() if p.strip()]
-            currency = exp.get("currency", "THB") or "THB"
+            currency = normalize_currency(exp.get("currency"))
             amount = as_float(exp.get("amount")) or 0.0
             amount_thb, rate, source = compute_thb(exp.get("amount"), currency)
             agg = currency_totals.setdefault(currency, {"orig": 0.0, "thb": 0.0, "rate": rate})
