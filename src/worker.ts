@@ -40,7 +40,6 @@ const SHOWTIME_ACTIONS = new Set([
   "wait_end_showtime_event_index",
   "wait_end_showtime_confirm",
 ]);
-const CURRENCY_RATES: Record<string, number> = { THB: 1, JPY: 0.23, USD: 34.5, KRW: 0.025 };
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -427,7 +426,7 @@ async function handleEditExpense(text: string, userId: string, groupId: string |
   const rows = await supabaseSelect<Expense>(env, "expenses", "*", [`id=eq.${id}`], "limit=1");
   if (!rows.length) return reply(env, replyToken, "ไม่พบรายการนี้");
   const currency = rows[0].currency || "THB";
-  const amountThb = await computeAmountThb(amount, currency);
+  const amountThb = await computeAmountThb(env, amount, currency);
   await supabasePatch(env, "expenses", { amount, amount_thb: amountThb.amount, exchange_rate_used: amountThb.rate, exchange_rate_source: amountThb.source }, [`id=eq.${id}`]);
   return reply(env, replyToken, `แก้ไข ID ${String(id).padStart(4, "0")} เป็น ${amount.toLocaleString()} ${currency} แล้ว`);
 }
@@ -718,7 +717,7 @@ async function getAllExpenses(env: Env, tripId: string): Promise<Expense[]> {
 }
 
 async function saveExpense(env: Env, tripId: string, userId: string, payer: string, item: string, amount: number, currency: string, tag: string | null, people: string[], slipUrl: string | null = null): Promise<any> {
-  const amountThb = await computeAmountThb(amount, currency);
+  const amountThb = await computeAmountThb(env, amount, currency);
   return supabaseInsert(env, "expenses", { trip_id: tripId, line_user_id: payer, created_by_user_id: userId, payer_name: payer, amount, amount_thb: amountThb.amount, exchange_rate_used: amountThb.rate, exchange_rate_source: amountThb.source, item_name: item || "ค่าใช้จ่าย", currency, tag, participants: people, slip_url: slipUrl });
 }
 
@@ -792,10 +791,11 @@ function getTripBaseCurrency(trip: Trip | null): string {
   return ISO_4217.has(raw) ? raw : "THB";
 }
 
-async function computeAmountThb(amount: number, currency: string): Promise<{ amount: number; rate: number; source: string }> {
-  const curr = normalizeCurrency(currency) || "THB";
+async function computeAmountThb(env: Env, amount: number, currency: string): Promise<{ amount: number; rate: number; source: string }> {
+  const curr = normalizeCurrencyCode(currency) || "THB";
   if (curr === "THB") return { amount, rate: 1, source: "same_currency" };
-  return { amount: amount * (CURRENCY_RATES[curr] || 1), rate: CURRENCY_RATES[curr] || 1, source: "fallback" };
+  const rate = await getRateThb(env, curr); // เรทสดแบบ cache (12 ชม.) มี fallback ในตัว
+  return { amount: amount * rate, rate, source: "live" };
 }
 
 const FX_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12h
