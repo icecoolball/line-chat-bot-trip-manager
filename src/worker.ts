@@ -1,3 +1,11 @@
+import {
+  COUNTRY_TO_CURRENCY,
+  ISO_4217,
+  FALLBACK_RATES,
+  normalizeCountryName,
+  normalizeCurrencyCode,
+} from "./currency-by-country";
+
 type Env = {
   LINE_CHANNEL_ACCESS_TOKEN: string;
   LINE_CHANNEL_SECRET: string;
@@ -766,6 +774,13 @@ function parsePositiveAmount(text: string): number | null {
 function normalizeCurrency(v: string | null | undefined): string | null {
   const x = String(v || "").trim().toUpperCase();
   return ["THB", "JPY", "USD", "KRW"].includes(x) ? x : null;
+}
+
+export function resolveBaseCurrency(input: string): string | null {
+  const code = normalizeCurrencyCode(input);
+  if (ISO_4217.has(code)) return code;
+  const byCountry = COUNTRY_TO_CURRENCY[normalizeCountryName(input)];
+  return byCountry || null;
 }
 
 function getTripBaseCurrency(trip: Trip | null): string {
