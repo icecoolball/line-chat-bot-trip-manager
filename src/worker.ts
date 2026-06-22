@@ -47,7 +47,7 @@ export default {
       if (url.pathname.startsWith("/api/schedules/") && request.method === "DELETE") return deleteSchedule(request, env);
       if (url.pathname === "/api/check-showtime" && request.method === "POST") return authCron(request, env, () => runShowtimeCheck(env));
       if (url.pathname === "/api/daily-summary" && request.method === "POST") return authCron(request, env, () => runDailySummary(env));
-      if (url.pathname === "/api/export-trip" && request.method === "POST") return handleExportTrip(request, env);
+      if (url.pathname === "/api/export-trip" && request.method === "POST") return handleExportTrip(request, env, ctx);
       if (url.pathname === "/api/server-time" && request.method === "GET") return json({ ok: true, serverTime: Date.now() });
       return json({ ok: false, error: "Not found" }, 404);
     } catch (error) {
@@ -98,7 +98,7 @@ async function handleLineEvent(event: any, env: Env, ctx: ExecutionContext): Pro
     return;
   }
   if (event.message?.type === "image") {
-    await handleImage(event.message.id, userId, groupId, targetId, event.replyToken, env);
+    await handleImage(event.message.id, userId, groupId, targetId, event.replyToken, env, ctx);
   }
 }
 
@@ -109,17 +109,19 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
 
   if (lower === "state") return reply(env, replyToken, buildStateText(state));
   if (["menu", "เมนู"].includes(lower)) return replyFlex(env, replyToken, buildMainMenuFlex());
-  if (["help", "ช่วยเหลือ"].includes(lower)) return reply(env, replyToken, buildHelpText());
+  if (["help", "ช่วยเหลือ"].includes(lower)) return replyFlex(env, replyToken, buildHelpFlex());
+  if (state && SHOWTIME_ACTIONS.has(state.action) && lower.startsWith("edit showtime")) return handleShowtimeText(text, userId, groupId, targetId, replyToken, state, env);
   if (lower === "edit" || lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env);
-
-  if (state?.action === "wait_slip_confirm") return handleSlipConfirm(text, userId, replyToken, state, env);
-  if (state?.action === "wait_slip_amount") return handleSlipManualAmount(text, userId, replyToken, state, env);
-  if (state?.action === "wait_slip_checking") return reply(env, replyToken, "กำลังตรวจยอดจากสลิปอยู่ รอสักครู่");
-  if (state?.action === "wait_slip_payer") return handleSlipAssignment(text, userId, groupId, replyToken, state, env, ctx);
-  if (state?.action === "wait_trip_name") return handleTripName(text, userId, groupId, replyToken, env);
-  if (state?.action === "wait_trip_currency") return handleTripCurrency(text, userId, groupId, replyToken, state, env);
-  if (state && SHOWTIME_ACTIONS.has(state.action)) return handleShowtimeText(text, userId, groupId, targetId, replyToken, state, env);
-  if (state?.action === "export_history") return handleExportHistoryChoice(text, userId, replyToken, state, env);
+  if (state?.action === "export_history" && ["cancel", "exit", "ออก", "ยกเลิก"].includes(lower)) {
+    await clearState(env, userId);
+    return reply(env, replyToken, "ออกจาก history แล้ว");
+  }
+  if (lower === "menu showtime" || lower === "help showtime") {
+    if (state && SHOWTIME_ACTIONS.has(state.action)) return replyFlex(env, replyToken, buildShowtimeMenuFlex());
+    return reply(env, replyToken, "ใช้ menu/help showtime ได้เฉพาะตอนอยู่ในโหมด Showtime");
+  }
+  if (/^showtime\s+\d+$/i.test(lower)) return handleShowtimeNumber(text, replyToken, env);
+  if (lower === "end showtime" || /^end\s+showtime\s+\d+$/i.test(lower)) return handleEndShowtimeCommand(text, userId, groupId, replyToken, env);
 
   if (text === "ทริป" || lower === "trip") {
     await setState(env, userId, groupId, "wait_trip_name", {});
@@ -130,11 +132,22 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
     await setState(env, userId, groupId, "wait_trip_currency", { trip_name: name });
     return reply(env, replyToken, "ระบุสกุลเงินหลักของทริป เช่น THB / JPY / USD / KRW");
   }
+
+  if (state?.action === "wait_slip_confirm") return handleSlipConfirm(text, userId, replyToken, state, env);
+  if (state?.action === "wait_slip_amount") return handleSlipManualAmount(text, userId, replyToken, state, env);
+  if (state?.action === "wait_slip_checking") return reply(env, replyToken, "กำลังตรวจยอดจากสลิปอยู่ รอสักครู่");
+  if (state?.action === "wait_slip_payer") return handleSlipAssignment(text, userId, groupId, replyToken, state, env, ctx);
+  if (state?.action === "wait_trip_name") return handleTripName(text, userId, groupId, replyToken, env);
+  if (state?.action === "wait_trip_currency") return handleTripCurrency(text, userId, groupId, replyToken, state, env);
+  if (state && SHOWTIME_ACTIONS.has(state.action)) return handleShowtimeText(text, userId, groupId, targetId, replyToken, state, env);
+  if (state?.action === "export_history" && ["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
+  if (state?.action === "export_history") return handleExportHistoryChoice(text, userId, targetId, replyToken, state, env, ctx);
+
   if (["ยอด", "sum"].includes(lower)) return reply(env, replyToken, await buildTripTotalMessage(env, userId, groupId));
   if (["ยอดวันนี้", "today"].includes(lower)) return reply(env, replyToken, await buildTodayMessage(env, userId, groupId));
   if (lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env);
-  if (["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, replyToken, env);
-  if (lower.startsWith("excel")) return handleExportCommand(userId, groupId, targetId, replyToken, env);
+  if (["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
+  if (lower.startsWith("excel")) return handleExportCommand(userId, groupId, targetId, replyToken, env, ctx);
   if (["end trip", "จบทริป"].includes(lower)) return handleEndTrip(userId, groupId, replyToken, env);
   if (lower === "showtime" || lower === "เพิ่ม" || lower === "add showtime") return enterShowtime(text, userId, groupId, targetId, replyToken, env);
 
@@ -170,14 +183,11 @@ async function handleTripCurrency(text: string, userId: string, groupId: string 
   return reply(env, replyToken, `เริ่มทริปใหม่: ${tripName}\nสกุลเงินหลัก: ${currency}`);
 }
 
-async function handleImage(messageId: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
+async function handleImage(messageId: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env, ctx: ExecutionContext): Promise<void> {
   const state = await getState(env, userId);
   if (state && SHOWTIME_ACTIONS.has(state.action)) {
-    const text = await ocrLineImage(env, messageId);
-    const items = extractShowtime(text || "");
-    if (!items.length) return reply(env, replyToken, "อ่านรูปแล้วแต่ไม่พบข้อมูล Showtime");
-    await setState(env, userId, groupId, "showtime_mode", { ...state.payload, showtime_temp: items, target_id: targetId });
-    return reply(env, replyToken, "อ่าน Showtime สำเร็จ\n" + formatShowtimeItems(items) + "\nพิมพ์ save เพื่อบันทึก");
+    waitUntilShowtimeImageOcr(ctx, env, messageId, userId, groupId, targetId);
+    return reply(env, replyToken, "รับรูป Showtime แล้ว กำลังอ่านตาราง...");
   }
 
   const trip = await getActiveTrip(env, userId, groupId);
@@ -186,6 +196,29 @@ async function handleImage(messageId: string, userId: string, groupId: string | 
   current.push(messageId);
   await setState(env, userId, groupId, "wait_slip_payer", { message_ids: current, trip_id: trip.id, base_currency: getTripBaseCurrency(trip), target_id: targetId });
   return reply(env, replyToken, `รับสลิป/บิลแล้ว (${current.length} ใบ)\nพิมพ์ #หมวด ตามด้วยชื่อ เช่น #ค่าอาหาร บอล ปาค`);
+}
+
+function waitUntilShowtimeImageOcr(ctx: ExecutionContext, env: Env, messageId: string, userId: string, groupId: string | null, targetId: string): void {
+  ctx.waitUntil(finishShowtimeImageOcr(env, messageId, userId, groupId, targetId).catch((error) => console.error("Showtime OCR background failed", errorMessage(error))));
+}
+
+async function finishShowtimeImageOcr(env: Env, messageId: string, userId: string, groupId: string | null, targetId: string): Promise<void> {
+  const text = await ocrLineImage(env, messageId);
+  const items = extractShowtime(text || "");
+  if (!items.length) {
+    await push(env, targetId, "อ่านรูปแล้วแต่ไม่พบข้อมูล Showtime\nลองพิมพ์ตารางเอง เช่น 17:00-17:50 KLEAR");
+    return;
+  }
+  const state = await getState(env, userId);
+  const basePayload = state && SHOWTIME_ACTIONS.has(state.action) ? state.payload : {};
+  const baseItems = (basePayload.showtime_temp as any[] || []).length
+    ? (basePayload.showtime_temp as any[])
+    : basePayload.event_name
+      ? (await loadShowtime(env, String(basePayload.event_name))).schedule
+      : [];
+  const merged = mergeShowtimeItems(baseItems, items);
+  await setState(env, userId, groupId, "showtime_mode", { ...basePayload, showtime_temp: merged, target_id: targetId });
+  await push(env, targetId, "อ่าน Showtime สำเร็จ\n" + formatShowtimeItems(merged) + "\nพิมพ์ save เพื่อบันทึก");
 }
 
 async function handleSlipAssignment(text: string, userId: string, groupId: string | null, replyToken: string, state: BotState, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -263,16 +296,64 @@ async function saveSlipFromState(amount: number, userId: string, replyToken: str
 
 async function enterShowtime(text: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
   const events = await listShowtimeEvents(env);
-  if (text.toLowerCase() === "showtime" && events.length) return reply(env, replyToken, buildShowtimeEventList(events));
+  if (text.toLowerCase() === "showtime" && events.length) {
+    await setState(env, userId, groupId, "showtime_mode", { target_id: targetId, events, showtime_temp: [] });
+    return reply(env, replyToken, buildShowtimeEventList(events) + "\nพิมพ์ menu showtime เพื่อดูคำสั่ง หรือ exit เพื่อออก");
+  }
   await setState(env, userId, groupId, "wait_showtime_event_name", { target_id: targetId });
   return reply(env, replyToken, "ระบุชื่อ Showtime/Event เช่น Big Mountain 2026");
 }
 
+async function handleShowtimeNumber(text: string, replyToken: string, env: Env): Promise<void> {
+  const m = text.match(/^showtime\s+(\d+)$/i);
+  const idx = Number(m?.[1] || 0) - 1;
+  const events = await listShowtimeEvents(env);
+  if (!events[idx]) return reply(env, replyToken, `เลขไม่ถูกต้อง${events.length ? ` (1-${events.length})` : ""}`);
+  return reply(env, replyToken, await formatShowtimeMessage(env, events[idx].event_name));
+}
+
+async function selectShowtimeEvent(text: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
+  const m = text.match(/^(?:showtime|edit\s+showtime)\s+(\d+)$/i);
+  const idx = Number(m?.[1] || 0) - 1;
+  const events = await listShowtimeEvents(env);
+  if (!events[idx]) return reply(env, replyToken, `เลขไม่ถูกต้อง${events.length ? ` (1-${events.length})` : ""}`);
+  const selected = events[idx];
+  const loaded = await loadShowtime(env, selected.event_name);
+  await setState(env, userId, groupId, "showtime_mode", {
+    event_name: selected.event_name,
+    show_date: loaded.show_date || selected.show_date || "",
+    target_id: targetId,
+    showtime_temp: loaded.schedule,
+  });
+  return reply(env, replyToken, `เลือก event: ${selected.event_name}\n${await formatShowtimeMessage(env, selected.event_name)}\n\nพิมพ์เวลาใหม่เพื่อแก้/เพิ่ม แล้วพิมพ์ save`);
+}
+
+async function handleEndShowtimeCommand(text: string, userId: string, groupId: string | null, replyToken: string, env: Env): Promise<void> {
+  const events = await listShowtimeEvents(env);
+  if (!events.length) return reply(env, replyToken, "ไม่มี event ในระบบให้ลบ");
+  const m = text.match(/^end\s+showtime\s+(\d+)$/i);
+  if (!m) return reply(env, replyToken, "เลือก event ที่ต้องการลบ:\n" + events.map((e, i) => `${i + 1}. ${e.event_name} (${e.count} วง)`).join("\n") + "\nพิมพ์ end showtime [เลข]");
+  const idx = Number(m[1]) - 1;
+  if (!events[idx]) return reply(env, replyToken, `เลขไม่ถูกต้อง (1-${events.length})`);
+  await setState(env, userId, groupId, "wait_end_showtime_confirm", { event_name: events[idx].event_name });
+  return reply(env, replyToken, `ยืนยันลบ event '${events[idx].event_name}' ทั้งหมด?\nพิมพ์ yes เพื่อยืนยัน หรือ exit เพื่อยกเลิก`);
+}
+
 async function handleShowtimeText(text: string, userId: string, groupId: string | null, targetId: string, replyToken: string, state: BotState, env: Env): Promise<void> {
   const lower = text.toLowerCase();
+  if (lower === "menu showtime" || lower === "help showtime") return replyFlex(env, replyToken, buildShowtimeMenuFlex());
   if (["exit", "cancel", "ออก", "ยกเลิก"].includes(lower)) {
     await clearState(env, userId);
     return reply(env, replyToken, "ออกจากโหมด Showtime แล้ว");
+  }
+  if (state.action === "wait_end_showtime_confirm") {
+    const eventName = String(state.payload.event_name || "");
+    if (["yes", "y"].includes(lower)) {
+      await deleteShowtimeEvent(env, eventName);
+      await setState(env, userId, groupId, "showtime_mode", { target_id: targetId, showtime_temp: [] });
+      return reply(env, replyToken, `ลบ event '${eventName}' แล้ว\nยังอยู่ในโหมด Showtime พิมพ์ exit เพื่อออก`);
+    }
+    return reply(env, replyToken, "พิมพ์ yes เพื่อยืนยัน หรือ exit เพื่อยกเลิก");
   }
   if (state.action === "wait_showtime_event_name") {
     await setState(env, userId, groupId, "wait_showtime_date", { event_name: text, target_id: targetId });
@@ -284,16 +365,33 @@ async function handleShowtimeText(text: string, userId: string, groupId: string 
     return reply(env, replyToken, "เข้าโหมด Showtime แล้ว\nส่งรูปตาราง หรือพิมพ์ตารางหลายบรรทัด เช่น 13:00-13:50 ARTIST\nพิมพ์ save เพื่อบันทึก");
   }
   if (state.action === "showtime_mode") {
+    if (lower === "edit showtime") return reply(env, replyToken, "พิมพ์ edit showtime [เลข] เช่น edit showtime 1");
+    if (/^edit\s+showtime\s+\d+$/i.test(lower)) return selectShowtimeEvent(text, userId, groupId, targetId, replyToken, env);
+    if (/^showtime\s+\d+$/i.test(lower)) return selectShowtimeEvent(text, userId, groupId, targetId, replyToken, env);
+    if (lower === "end showtime" || /^end\s+showtime\s+\d+$/i.test(lower)) return handleEndShowtimeCommand(text, userId, groupId, replyToken, env);
+    if (lower === "showtime") {
+      const events = await listShowtimeEvents(env);
+      return reply(env, replyToken, events.length ? buildShowtimeEventList(events) : "ยังไม่มีข้อมูล Showtime");
+    }
+    if (lower === "เพิ่ม" || lower === "add showtime") {
+      await setState(env, userId, groupId, "wait_showtime_event_name", { target_id: targetId });
+      return reply(env, replyToken, "ระบุชื่อ Showtime/Event");
+    }
     if (lower === "save") {
       const eventName = String(state.payload.event_name || "default");
       const items = ((state.payload.showtime_temp as any[]) || []).map((x) => ({ time: x.time, artist: x.artist }));
       await saveShowtime(env, eventName, String(state.payload.show_date || ""), items);
-      await clearState(env, userId);
-      return reply(env, replyToken, `บันทึก Showtime แล้ว\n${await formatShowtimeMessage(env, eventName)}`);
+      await setState(env, userId, groupId, "showtime_mode", { ...state.payload, event_name: eventName, showtime_temp: [], target_id: targetId });
+      return reply(env, replyToken, `บันทึก Showtime แล้ว\n${await formatShowtimeMessage(env, eventName)}\n\nยังอยู่ในโหมด Showtime พิมพ์ exit เพื่อออก`);
     }
     const items = extractShowtime(text);
     if (!items.length) return reply(env, replyToken, "ไม่พบรูปแบบเวลา เช่น 13:00-13:50 ARTIST");
-    const merged = sortShowtime([...(state.payload.showtime_temp as any[] || []), ...items]);
+    const baseItems = (state.payload.showtime_temp as any[] || []).length
+      ? (state.payload.showtime_temp as any[])
+      : state.payload.event_name
+        ? (await loadShowtime(env, String(state.payload.event_name))).schedule
+        : [];
+    const merged = mergeShowtimeItems(baseItems, items);
     await setState(env, userId, groupId, "showtime_mode", { ...state.payload, showtime_temp: merged, target_id: targetId });
     return reply(env, replyToken, "รับตารางแล้ว\n" + formatShowtimeItems(merged) + "\nพิมพ์ save เพื่อบันทึก");
   }
@@ -334,28 +432,30 @@ async function handleEndTrip(userId: string, groupId: string | null, replyToken:
   return reply(env, replyToken, msg);
 }
 
-async function handleHistory(userId: string, groupId: string | null, replyToken: string, env: Env): Promise<void> {
+async function handleHistory(userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
   const trips = await supabaseSelect<Trip>(env, "trips", "*", [], "order=created_at.desc&limit=10");
   if (!trips.length) return reply(env, replyToken, "ยังไม่มีประวัติทริป");
-  await setState(env, userId, groupId, "export_history", { trips });
+  await setState(env, userId, groupId, "export_history", { trips, target_id: targetId });
   return reply(env, replyToken, "ประวัติทริปล่าสุด\n" + trips.map((t, i) => `${i + 1}. ${t.title || "-"} (${t.status || "-"})`).join("\n") + "\nพิมพ์ excel [เลข] เพื่อ export");
 }
 
-async function handleExportHistoryChoice(text: string, userId: string, replyToken: string, state: BotState, env: Env): Promise<void> {
+async function handleExportHistoryChoice(text: string, userId: string, targetId: string, replyToken: string, state: BotState, env: Env, ctx: ExecutionContext): Promise<void> {
   const m = text.match(/^excel\s+(\d+)$/i) || text.match(/^(\d+)$/);
-  if (!m) return reply(env, replyToken, "พิมพ์ excel [เลข] เช่น excel 1");
+  if (!m) return reply(env, replyToken, "พิมพ์ excel [เลข] เช่น excel 1\nหรือพิมพ์ exit เพื่อออกจาก history");
   const idx = Number(m[1]) - 1;
   const trips = (state.payload.trips as Trip[]) || [];
   if (!trips[idx]) return reply(env, replyToken, "เลขไม่ถูกต้อง");
   await clearState(env, userId);
-  await queueExportJob(env, trips[idx], userId, userId);
+  const job = await createExportJob(env, trips[idx], String(state.payload.target_id || targetId), userId);
+  dispatchExportJobInBackground(ctx, env, job);
   return reply(env, replyToken, `รับงาน export แล้ว: ${trips[idx].title}\nเสร็จแล้วจะส่งลิงก์กลับใน LINE`);
 }
 
-async function handleExportCommand(userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
+async function handleExportCommand(userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env, ctx: ExecutionContext): Promise<void> {
   const trip = await getActiveTrip(env, userId, groupId);
-  if (!trip) return handleHistory(userId, groupId, replyToken, env);
-  await queueExportJob(env, trip, targetId, userId);
+  if (!trip) return handleHistory(userId, groupId, targetId, replyToken, env);
+  const job = await createExportJob(env, trip, targetId, userId);
+  dispatchExportJobInBackground(ctx, env, job);
   return reply(env, replyToken, `รับงาน export แล้ว: ${trip.title}\nเสร็จแล้วจะส่งลิงก์กลับใน LINE`);
 }
 
@@ -385,11 +485,12 @@ async function deleteSchedule(request: Request, env: Env): Promise<Response> {
   return json({ ok: true });
 }
 
-async function handleExportTrip(request: Request, env: Env): Promise<Response> {
+async function handleExportTrip(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const data = await request.json<any>();
   const trip = await supabaseSelect<Trip>(env, "trips", "*", [`id=eq.${encodeURIComponent(data.tripId || "")}`], "limit=1");
   if (!trip.length) return json({ ok: false, error: "Trip not found" }, 404);
-  const job = await queueExportJob(env, trip[0], data.targetId, data.requestedBy || data.targetId);
+  const job = await createExportJob(env, trip[0], data.targetId, data.requestedBy || data.targetId);
+  dispatchExportJobInBackground(ctx, env, job);
   return json({ ok: true, job });
 }
 
@@ -808,18 +909,31 @@ function extractShowtime(text: string): Array<{ time: string; artist: string }> 
   const lines = text.split(/\n+/).map((x) => x.trim()).filter(Boolean);
   const out: Array<{ time: string; artist: string }> = [];
   const re = /(\d{1,2}[:.]\d{2})\s*[-–]\s*(\d{1,2}[:.]\d{2})/;
+  let previousText = "";
   for (const line of lines) {
     const m = line.match(re);
-    if (!m) continue;
+    if (!m) {
+      previousText = line;
+      continue;
+    }
     const time = `${m[1]}-${m[2]}`.replace(/\./g, ":");
-    const artist = line.replace(re, "").replace(/^[^\wก-๙A-Za-z0-9]+/, "").trim() || "Unknown";
+    const inlineArtist = line.replace(re, "").replace(/^[^\wก-๙A-Za-z0-9]+/, "").trim();
+    const artist = inlineArtist || previousText || "Unknown";
     out.push({ time, artist });
+    previousText = "";
   }
   return sortShowtime(out);
 }
 
 function sortShowtime(items: Array<{ time: string; artist: string }>) {
   return items.sort((a, b) => minutes(a.time) - minutes(b.time));
+}
+
+function mergeShowtimeItems(base: Array<{ time: string; artist: string }>, updates: Array<{ time: string; artist: string }>) {
+  const byTime = new Map<string, { time: string; artist: string }>();
+  for (const item of base) byTime.set(String(item.time), { time: String(item.time), artist: String(item.artist || "") });
+  for (const item of updates) byTime.set(String(item.time), { time: String(item.time), artist: String(item.artist || "") });
+  return sortShowtime(Array.from(byTime.values()));
 }
 
 function minutes(t: string): number {
@@ -861,24 +975,92 @@ function buildShowtimeEventList(events: Array<{ event_name: string; count: numbe
   return "ตาราง Showtime ที่มีอยู่:\n" + events.map((e, i) => `${i + 1}. ${e.event_name} (${e.count} วง)${e.show_date ? ` | ${e.show_date}` : ""}`).join("\n") + "\nพิมพ์ เพิ่ม เพื่อเพิ่ม event ใหม่";
 }
 
+function buildShowtimeCommandText(): string {
+  return [
+    "เมนู Showtime:",
+    "menu showtime",
+    "help showtime",
+    "showtime",
+    "showtime [เลข]",
+    "เพิ่ม",
+    "add showtime",
+    "end showtime",
+    "end showtime [เลข]",
+    "save",
+    "exit",
+    "cancel",
+  ].join("\n");
+}
+
+function buildShowtimeMenuFlex(): Record<string, unknown> {
+  return {
+    type: "flex",
+    altText: "เมนู Showtime",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          { type: "text", text: "Showtime", weight: "bold", size: "xl", align: "center", color: "#7C3AED" },
+          { type: "text", text: "เลือกคำสั่งที่ต้องการใช้งาน", size: "sm", color: "#777777", align: "center", wrap: true },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        flex: 0,
+        contents: [
+          { type: "button", style: "primary", color: "#7C3AED", height: "md", action: { type: "message", label: "ดูรายการ", text: "showtime" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "เพิ่มตาราง", text: "เพิ่ม" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ดูคำสั่ง", text: "help showtime" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ลบ event", text: "end showtime" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ออก", text: "exit" } },
+        ],
+      },
+    },
+  };
+}
+
 async function formatShowtimeMessage(env: Env, eventName: string): Promise<string> {
   const st = await loadShowtime(env, eventName);
   return `วันที่จัดแสดง: ${st.show_date || "ไม่ระบุ"}\n` + (st.schedule.length ? formatShowtimeItems(st.schedule) : "ยังไม่มีข้อมูล Showtime");
 }
 
-async function queueExportJob(env: Env, trip: Trip, targetId: string, requestedBy: string): Promise<any> {
-  const job = await supabaseInsert<any>(env, "export_jobs", { trip_id: String(trip.id), trip_title: trip.title, target_id: targetId, requested_by: requestedBy, status: "queued" });
+async function deleteShowtimeEvent(env: Env, eventName: string): Promise<void> {
+  await supabaseDelete(env, "showtimes", [`event_name=eq.${encodeURIComponent(eventName)}`]);
+  await supabaseDelete(env, "showtime_events", [`event_name=eq.${encodeURIComponent(eventName)}`]);
+}
+
+async function createExportJob(env: Env, trip: Trip, targetId: string, requestedBy: string): Promise<any> {
+  return supabaseInsert<any>(env, "export_jobs", { trip_id: String(trip.id), trip_title: trip.title, target_id: targetId, requested_by: requestedBy, status: "queued" });
+}
+
+function dispatchExportJobInBackground(ctx: ExecutionContext, env: Env, job: any): void {
+  ctx.waitUntil(dispatchExportJob(env, job).catch((error) => console.error("Export dispatch failed", errorMessage(error))));
+}
+
+async function dispatchExportJob(env: Env, job: any): Promise<void> {
   if (env.GITHUB_TOKEN && env.GITHUB_REPO) {
     const workflowId = env.GITHUB_WORKFLOW_ID || "export-trip.yml";
     const ref = env.GITHUB_WORKFLOW_REF || "main";
-    const res = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${workflowId}/dispatches`, {
+    const res = await fetchWithTimeout(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${workflowId}/dispatches`, {
       method: "POST",
       headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, "Content-Type": "application/json", "User-Agent": "line-trip-bot-worker" },
       body: JSON.stringify({ ref, inputs: { export_job_id: job.id } }),
-    });
-    if (!res.ok) await supabasePatch(env, "export_jobs", { status: "queued_dispatch_failed", error: await res.text() }, [`id=eq.${job.id}`]);
+    }, 8000);
+    if (!res.ok) {
+      const error = await res.text();
+      await supabasePatch(env, "export_jobs", { status: "queued_dispatch_failed", error }, [`id=eq.${job.id}`]);
+      await push(env, job.target_id, `Export Excel เริ่มไม่สำเร็จ\nGitHub Actions: ${res.status}\n${error.slice(0, 300)}`);
+    }
+    return;
   }
-  return job;
+  await supabasePatch(env, "export_jobs", { status: "queued_dispatch_failed", error: "Missing GITHUB_TOKEN or GITHUB_REPO" }, [`id=eq.${job.id}`]);
+  await push(env, job.target_id, "Export Excel เริ่มไม่สำเร็จ\nยังไม่ได้ตั้ง GITHUB_TOKEN หรือ GITHUB_REPO ใน Worker");
 }
 
 function formatSchedule(s: any) {
@@ -891,6 +1073,40 @@ function buildStateText(state: BotState | null): string {
 
 function buildHelpText(): string {
   return "คำสั่ง: ทริป, ยอด, ยอดวันนี้, edit [id] [ยอด], history, excel, end trip, showtime\nเพิ่มรายจ่าย: รายการ 120 #หมวด ชื่อ1 ชื่อ2\nสลิป: ส่งรูป แล้วพิมพ์ #หมวด ชื่อ1 ชื่อ2";
+}
+
+function buildHelpFlex(): Record<string, unknown> {
+  return {
+    type: "flex",
+    altText: "คำสั่งทั้งหมด",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          { type: "text", text: "คำสั่งทั้งหมด", weight: "bold", size: "xl", align: "center", color: "#1DB446" },
+          { type: "text", text: "เลือกคำสั่งที่ต้องการใช้งาน", size: "sm", color: "#777777", align: "center", wrap: true },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        flex: 0,
+        contents: [
+          { type: "button", style: "primary", color: "#1DB446", height: "md", action: { type: "message", label: "เมนูหลัก", text: "menu" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ยอดรวม", text: "ยอด" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ยอดวันนี้", text: "ยอดวันนี้" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "แก้ไขรายการ", text: "edit" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ประวัติ/Excel", text: "history" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "Showtime", text: "showtime" } },
+        ],
+      },
+    },
+  };
 }
 
 function buildMainMenuFlex(): Record<string, unknown> {
