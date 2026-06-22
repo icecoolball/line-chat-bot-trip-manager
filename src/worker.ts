@@ -816,16 +816,26 @@ export async function getRateThb(env: Env, currency: string): Promise<number> {
   const curr = normalizeCurrencyCode(currency);
   if (curr === "THB" || !curr) return 1;
 
-  const rows = await supabaseSelect<any>(env, "fx_rates", "*", [`currency=eq.${curr}`]);
-  const cached = rows?.[0];
+  // อ่าน cache แบบ degrade ได้: ถ้า Supabase ล่มก็ไปต่อ (ดึงสด/fallback) ไม่ throw
+  let cached: any = null;
+  try {
+    const rows = await supabaseSelect<any>(env, "fx_rates", "*", [`currency=eq.${curr}`], "limit=1");
+    cached = rows?.[0] ?? null;
+  } catch {
+    cached = null;
+  }
   if (cached && Date.now() - Date.parse(cached.updated_at) < FX_CACHE_TTL_MS) {
     return Number(cached.rate_thb);
   }
 
   const live = await fetchLiveRateThb(curr);
   if (live) {
-    await supabaseUpsert(env, "fx_rates",
-      { currency: curr, rate_thb: live, updated_at: new Date().toISOString() }, "currency");
+    try {
+      await supabaseUpsert(env, "fx_rates",
+        { currency: curr, rate_thb: live, updated_at: new Date().toISOString() }, "currency");
+    } catch {
+      // เขียน cache ไม่ได้ก็ยังใช้เรทสดที่ได้มา
+    }
     return live;
   }
 
