@@ -146,6 +146,7 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
   if (state?.action === "wait_slip_payer") return handleSlipAssignment(text, userId, groupId, replyToken, state, env, ctx);
   if (state?.action === "wait_trip_name") return handleTripName(text, userId, groupId, replyToken, env);
   if (state?.action === "wait_trip_currency") return handleTripCurrency(text, userId, groupId, replyToken, state, env);
+  if (state?.action === "wait_trip_dates") return handleTripDates(text, userId, groupId, replyToken, state, env);
   if (state && SHOWTIME_ACTIONS.has(state.action)) return handleShowtimeText(text, userId, groupId, targetId, replyToken, state, env);
   if (state?.action === "export_history" && ["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
   if (state?.action === "export_history") return handleExportHistoryChoice(text, userId, targetId, replyToken, state, env, ctx);
@@ -184,10 +185,57 @@ async function handleTripCurrency(text: string, userId: string, groupId: string 
   const currency = resolveBaseCurrency(text);
   if (!currency) return reply(env, replyToken, "ไม่รู้จักประเทศ/สกุลเงินนี้ ลองพิมพ์ชื่อประเทศ เช่น ญี่ปุ่น หรือรหัสสกุล เช่น JPY");
   const tripName = String(state.payload.trip_name || "").trim();
+  await setState(env, userId, groupId, "wait_trip_dates", { trip_name: tripName, base_currency: currency });
+  return reply(env, replyToken, "ทริปช่วงวันไหน? เช่น 23/06/2026-27/06/2026\n(หรือพิมพ์วันเริ่มอย่างเดียว / พิมพ์ ข้าม ถ้าไม่ระบุ)");
+}
+
+async function handleTripDates(text: string, userId: string, groupId: string | null, replyToken: string, state: BotState, env: Env): Promise<void> {
+  if (["cancel", "exit", "ยกเลิก", "ออก"].includes(text.trim().toLowerCase())) {
+    await clearState(env, userId);
+    return reply(env, replyToken, "ยกเลิกการสร้างทริปแล้ว");
+  }
+  const dates = parseTripDates(text);
+  if (!dates) return reply(env, replyToken, "อ่านวันที่ไม่ออก ลองพิมพ์ เช่น 23/06/2026-27/06/2026 หรือพิมพ์ ข้าม");
+  const tripName = String(state.payload.trip_name || "").trim();
+  const currency = String(state.payload.base_currency || "THB");
   await supabasePatch(env, "trips", { status: "closed" }, [`creator_id=eq.${encodeURIComponent(userId)}`]);
-  await supabaseInsert(env, "trips", { title: tripName, status: "active", line_group_id: groupId, creator_id: userId, base_currency: currency });
+  await supabaseInsert(env, "trips", {
+    title: tripName, status: "active", line_group_id: groupId, creator_id: userId,
+    base_currency: currency, start_date: dates.start, end_date: dates.end,
+  });
   await clearState(env, userId);
-  return reply(env, replyToken, `เริ่มทริปใหม่: ${tripName}\nสกุลเงินหลัก: ${currency}`);
+  let dateLine = "";
+  if (dates.start) {
+    const days = dates.end ? Math.round((Date.parse(dates.end) - Date.parse(dates.start)) / 86400000) + 1 : null;
+    dateLine = `\nช่วง: ${dates.start}${dates.end ? ` ถึง ${dates.end}` : ""}${days ? ` (${days} วัน)` : ""}`;
+  }
+  return reply(env, replyToken, `เริ่มทริปใหม่: ${tripName}\nสกุลเงินหลัก: ${currency}${dateLine}`);
+}
+
+// คืน {start,end} (ISO) / {start:null,end:null} ถ้าข้าม / null ถ้าอ่านไม่ออก
+export function parseTripDates(text: string): { start: string | null; end: string | null } | null {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  if (["ข้าม", "-", "skip", "ไม่ระบุ", "none"].includes(t.toLowerCase())) return { start: null, end: null };
+  const found: string[] = [];
+  const re = /(\d{1,4})[\/-](\d{1,2})[\/-](\d{1,4})/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    let a = Number(m[1]);
+    const b = Number(m[2]);
+    let c = Number(m[3]);
+    let year: number;
+    let month: number;
+    let day: number;
+    if (a > 31) { year = a; month = b; day = c; } // YYYY-MM-DD
+    else { day = a; month = b; year = c; }         // DD/MM/YYYY
+    if (year < 100) year += 2000;
+    if (year > 2400) year -= 543; // พ.ศ. -> ค.ศ.
+    if (month < 1 || month > 12 || day < 1 || day > 31) continue;
+    found.push(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`);
+  }
+  if (!found.length) return null;
+  return { start: found[0], end: found[1] || null };
 }
 
 async function handleImage(messageId: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -535,11 +583,12 @@ async function runShowtimeCheck(env: Env): Promise<Record<string, unknown>> {
 }
 
 async function runDailySummary(env: Env): Promise<Record<string, unknown>> {
-  const today = thaiDateString(new Date());
+  // cron ยิงตอน 09:00 ไทย แล้วสรุปยอดของ "เมื่อวาน" (วันที่ผ่านมาเต็มวัน)
+  const targetDate = thaiDateString(new Date(Date.now() - 24 * 3600 * 1000));
   const trips = await supabaseSelect<Trip>(env, "trips", "*", [`status=eq.active`]);
   let sent = 0;
   for (const trip of trips) {
-    const expenses = (await getAllExpenses(env, trip.id)).filter((e) => thaiDateFromIso(e.created_at || "") === today);
+    const expenses = (await getAllExpenses(env, trip.id)).filter((e) => thaiDateFromIso(e.created_at || "") === targetDate);
     if (!expenses.length) continue;
     let totalThb = 0;
     const categories: Record<string, { total: number; people: Set<string> }> = {};
@@ -551,16 +600,16 @@ async function runDailySummary(env: Env): Promise<Record<string, unknown>> {
       categories[tag].total += amount;
       for (const p of participants(exp, exp.payer_name)) categories[tag].people.add(p);
     }
-    let msg = `สรุปยอดประจำวัน (${today})\nทริป: ${trip.title}\nยอดรวมวันนี้: ${totalThb.toLocaleString()} บาท\n\n`;
+    let msg = `สรุปยอดประจำวัน (${targetDate})\nทริป: ${trip.title}\nยอดรวมทั้งวัน: ${totalThb.toLocaleString()} บาท\n\n`;
     for (const [tag, data] of Object.entries(categories)) msg += `${tag} ${data.total.toLocaleString()} บาท (${Array.from(data.people).join(" ")})\n`;
     const target = trip.line_group_id || trip.creator_id;
     if (target) {
       await push(env, target, msg.trim());
       sent++;
     }
-    await supabaseUpsert(env, "daily_summaries", { trip_id: trip.id, summary_date: today, total_thb: totalThb, details: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, { total_thb: v.total, participants: Array.from(v.people) }])) }, "trip_id,summary_date");
+    await supabaseUpsert(env, "daily_summaries", { trip_id: trip.id, summary_date: targetDate, total_thb: totalThb, details: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, { total_thb: v.total, participants: Array.from(v.people) }])) }, "trip_id,summary_date");
   }
-  return { ok: true, sent, date: today };
+  return { ok: true, sent, date: targetDate };
 }
 
 async function verifyLineSignature(body: string, signature: string, secret: string): Promise<boolean> {

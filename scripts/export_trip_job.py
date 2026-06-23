@@ -1,7 +1,7 @@
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 import pandas as pd
 import requests
@@ -207,7 +207,28 @@ def main():
         by_date = {}
         for r in rows:
             by_date.setdefault(r.get("วันที่") or "ไม่ระบุวันที่", []).append(r)
+
+        # ช่วงวันที่ทริป (ถ้ามี) -> สร้างชีตทุกวันในช่วง + ป้าย Day N
+        trip_start = trip.get("start_date")
+        trip_end = trip.get("end_date")
         day_order = sorted(by_date.keys())
+        if trip_start and trip_end:
+            try:
+                s = date.fromisoformat(str(trip_start)[:10])
+                e = date.fromisoformat(str(trip_end)[:10])
+                span = [(s + timedelta(days=i)).isoformat() for i in range((e - s).days + 1)]
+                day_order = sorted(set(span) | set(by_date.keys()))
+            except Exception:
+                pass
+
+        def day_label(d):
+            if trip_start:
+                try:
+                    n = (date.fromisoformat(d) - date.fromisoformat(str(trip_start)[:10])).days + 1
+                    return f"Day {n} · {d[8:10]}/{d[5:7]}"
+                except Exception:
+                    return d
+            return d
 
         # ตารางสรุปแปลงเป็นบาท (ทั้งทริป)
         summary_rows = []
@@ -229,8 +250,8 @@ def main():
         # ตารางสรุปรายวัน (ยอดรวมบาทต่อวัน)
         daily_rows = []
         for d in day_order:
-            day_thb = sum(float(r.get("ยอดเทียบบาท") or 0) for r in by_date[d])
-            daily_rows.append({"วันที่": d, "ยอดรวม (บาท)": round(day_thb, 2)})
+            day_thb = sum(float(r.get("ยอดเทียบบาท") or 0) for r in by_date.get(d, []))
+            daily_rows.append({"วันที่": day_label(d), "ยอดรวม (บาท)": round(day_thb, 2)})
         daily_rows.append({"วันที่": "รวมทั้งหมด", "ยอดรวม (บาท)": round(grand_thb, 2)})
         daily_df = pd.DataFrame(daily_rows)
 
@@ -271,12 +292,13 @@ def main():
             return start + 1 + len(block_df) + 1 + 1  # หัวข้อ + header + แถว + เว้น 1 บรรทัด
 
         with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
-            # 1 วัน = 1 ชีต (ชื่อชีต = วันที่)
+            # 1 วัน = 1 ชีต (ชื่อชีต = Day N · DD/MM ถ้ามีวันเริ่มทริป, มิฉะนั้นวันที่ดิบ)
             for d in day_order:
-                sheet = safe_sheet(d)
-                day_df = pd.DataFrame(by_date[d], columns=EXPENSE_COLS)
+                sheet = safe_sheet(day_label(d))
+                day_rows = by_date.get(d, [])
+                day_df = pd.DataFrame(day_rows, columns=EXPENSE_COLS)
                 day_df.to_excel(writer, index=False, sheet_name=sheet)
-                day_thb = sum(float(r.get("ยอดเทียบบาท") or 0) for r in by_date[d])
+                day_thb = sum(float(r.get("ยอดเทียบบาท") or 0) for r in day_rows)
                 pd.DataFrame([{"_": "รวมวันนี้ (บาท)", "__": round(day_thb, 2)}]).to_excel(
                     writer, index=False, header=False, sheet_name=sheet, startrow=len(day_df) + 2, startcol=0
                 )
