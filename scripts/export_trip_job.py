@@ -84,6 +84,32 @@ def compute_thb(amount, currency):
     return round(amount_val, 2), None, "unknown_currency"
 
 
+def compute_settlement(paid, owed):
+    """จับคู่ลูกหนี้-เจ้าหนี้ให้จำนวนการโอนน้อยสุด (greedy) คืน list (จาก, ถึง, ยอด)."""
+    names = set(paid) | set(owed)
+    creditors, debtors = [], []
+    for n in names:
+        net = paid.get(n, 0.0) - owed.get(n, 0.0)
+        if net > 0.01:
+            creditors.append([n, net])
+        elif net < -0.01:
+            debtors.append([n, -net])
+    creditors.sort(key=lambda x: -x[1])
+    debtors.sort(key=lambda x: -x[1])
+    transfers = []
+    i = j = 0
+    while i < len(debtors) and j < len(creditors):
+        pay = min(debtors[i][1], creditors[j][1])
+        transfers.append((debtors[i][0], creditors[j][0], pay))
+        debtors[i][1] -= pay
+        creditors[j][1] -= pay
+        if debtors[i][1] < 0.01:
+            i += 1
+        if creditors[j][1] < 0.01:
+            j += 1
+    return transfers
+
+
 def thai_dt_text(value):
     if not value:
         return "", ""
@@ -137,6 +163,8 @@ def main():
         rows = []
         currency_totals = {}  # สกุล -> {"orig": ยอดสกุลเดิม, "thb": ยอดเทียบบาท, "rate": เรท}
         grand_thb = 0.0
+        paid_by_person = {}   # ผู้จ่าย -> ยอดบาทที่ออกจริง
+        owed_by_person = {}   # คน -> ยอดบาทที่ต้องจ่าย (ส่วนแบ่ง)
         for exp in expenses:
             date_text, time_text = thai_dt_text(exp.get("created_at"))
             participants = exp.get("participants") or []
@@ -150,6 +178,12 @@ def main():
             agg["thb"] += amount_thb
             agg["rate"] = rate
             grand_thb += amount_thb
+            payer = exp.get("payer_name") or exp.get("line_user_id") or ""
+            if payer:
+                paid_by_person[payer] = paid_by_person.get(payer, 0.0) + amount_thb
+            share = amount_thb / max(len(participants), 1)
+            for p in participants:
+                owed_by_person[p] = owed_by_person.get(p, 0.0) + share
             rows.append({
                 "ชื่อทริป": trip.get("title", ""),
                 "วันที่": date_text,
@@ -184,15 +218,38 @@ def main():
         })
         summary_df = pd.DataFrame(summary_rows)
 
+        # ตาราง "จ่ายไปแล้ว" (ใครออกเงินจริงเท่าไร)
+        paid_df = pd.DataFrame(
+            [{"คน": p, "จ่ายไปแล้ว (บาท)": round(v, 2)} for p, v in sorted(paid_by_person.items())]
+        )
+
+        # ตาราง "สรุปโอนเงิน" (ใครต้องโอนให้ใคร)
+        transfers = compute_settlement(paid_by_person, owed_by_person)
+        if transfers:
+            settle_df = pd.DataFrame(
+                [{"จาก": f, "ถึง": t, "ยอดโอน (บาท)": round(amt, 2)} for f, t, amt in transfers]
+            )
+        else:
+            settle_df = pd.DataFrame([{"จาก": "ไม่มียอดต้องโอน", "ถึง": "", "ยอดโอน (บาท)": ""}])
+
         filename = f"trip_{trip_id}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.xlsx"
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
             tmp_path = tmp.name
+
+        def write_block(writer, title, block_df, start):
+            pd.DataFrame([{"_": title}]).to_excel(
+                writer, index=False, header=False, sheet_name="Expenses", startrow=start, startcol=0
+            )
+            block_df.to_excel(writer, index=False, sheet_name="Expenses", startrow=start + 1)
+            return start + 1 + len(block_df) + 1 + 1  # หัวข้อ + header + แถว + เว้น 1 บรรทัด
+
         with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Expenses")
-            start_row = len(df) + 2  # เว้น 1 บรรทัดหลังตารางหลัก
-            header_df = pd.DataFrame([{"สกุล": "สรุปแปลงเป็นบาท"}])
-            header_df.to_excel(writer, index=False, header=False, sheet_name="Expenses", startrow=start_row, startcol=0)
-            summary_df.to_excel(writer, index=False, sheet_name="Expenses", startrow=start_row + 1)
+            ptr = len(df) + 2  # เว้น 1 บรรทัดหลังตารางหลัก
+            ptr = write_block(writer, "สรุปแปลงเป็นบาท", summary_df, ptr)
+            if not paid_df.empty:
+                ptr = write_block(writer, "จ่ายไปแล้ว", paid_df, ptr)
+            write_block(writer, "สรุปโอนเงิน", settle_df, ptr)
 
         with open(tmp_path, "rb") as f:
             supabase.storage.from_("trip-exports").upload(
