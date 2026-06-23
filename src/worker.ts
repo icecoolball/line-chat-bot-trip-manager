@@ -151,8 +151,8 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
   if (state?.action === "export_history" && ["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
   if (state?.action === "export_history") return handleExportHistoryChoice(text, userId, targetId, replyToken, state, env, ctx);
 
-  if (["ยอด", "sum"].includes(lower)) return reply(env, replyToken, await buildTripTotalMessage(env, userId, groupId));
-  if (["ยอดวันนี้", "today"].includes(lower)) return reply(env, replyToken, await buildTodayMessage(env, userId, groupId));
+  if (["ยอด", "sum"].includes(lower)) return replyAuto(env, replyToken, await buildTripTotalMessage(env, userId, groupId));
+  if (["ยอดวันนี้", "today"].includes(lower)) return replyAuto(env, replyToken, await buildTodayMessage(env, userId, groupId));
   if (lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env);
   if (["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
   if (lower.startsWith("excel")) return handleExportCommand(userId, groupId, targetId, replyToken, env, ctx);
@@ -165,7 +165,7 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
     const nameWarnings = await findSimilarPeopleNames(env, trip.id, parsed.participants);
     if (nameWarnings.length) return reply(env, replyToken, buildSimilarNameWarning(nameWarnings));
     const saved = await saveExpense(env, trip.id, userId, parsed.payer, parsed.item, parsed.amount, parsed.currency, parsed.tag, parsed.participants);
-    return reply(env, replyToken, `บันทึก ${parsed.amount.toLocaleString()} ${parsed.currency}${parsed.tag ? ` (${parsed.tag})` : ""}\nรายชื่อ: ${parsed.participants.join(" ")}${saved?.id ? `\nถ้ายอดผิด แก้ไข: edit ${String(saved.id).padStart(4, "0")} ${parsed.amount}` : ""}`);
+    return replyAuto(env, replyToken, buildSaveCard({ amount: parsed.amount, currency: parsed.currency, tag: parsed.tag, people: parsed.participants, payer: parsed.payer, id: saved?.id }));
   }
 
   return reply(env, replyToken, "ไม่เข้าใจคำสั่ง พิมพ์ help เพื่อดูคำสั่งทั้งหมด");
@@ -346,7 +346,7 @@ async function saveSlipFromState(amount: number, userId: string, replyToken: str
   const currency = String(state.payload.currency || "THB");
   const row = await saveExpense(env, tripId, userId, payer, `บิล ${new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}`, amount, currency, tag, people, "manual_slip");
   await clearState(env, userId);
-  return reply(env, replyToken, `${prefix}\nบันทึก ${amount.toLocaleString()} ${currency} (${tag})\nรายชื่อ: ${people.join(" ")}${row?.id ? `\nถ้ายอดผิด แก้ไข: edit ${String(row.id).padStart(4, "0")} ${amount}` : ""}`);
+  return replyAuto(env, replyToken, buildSaveCard({ amount, currency, tag, people, payer, id: row?.id, prefix }));
 }
 
 async function enterShowtime(text: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
@@ -364,7 +364,7 @@ async function handleShowtimeNumber(text: string, replyToken: string, env: Env):
   const idx = Number(m?.[1] || 0) - 1;
   const events = await listShowtimeEvents(env);
   if (!events[idx]) return reply(env, replyToken, `เลขไม่ถูกต้อง${events.length ? ` (1-${events.length})` : ""}`);
-  return reply(env, replyToken, await formatShowtimeMessage(env, events[idx].event_name));
+  return replyAuto(env, replyToken, await buildShowtimeCard(env, events[idx].event_name));
 }
 
 async function selectShowtimeEvent(text: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
@@ -461,16 +461,19 @@ async function handleEditExpense(text: string, userId: string, groupId: string |
     if (!expenses.length) return reply(env, replyToken, "ยังไม่มีรายการค่าใช้จ่ายให้แก้ไข");
     const recent = expenses.slice(-10).reverse();
     const rates = await getRatesForCurrencies(env, recent.map((e) => e.currency || "THB"));
-    const lines = recent.map((exp) => {
+    const body: FlexNode[] = [flexLabel("รายการล่าสุด")];
+    for (const exp of recent) {
       const id = String(exp.id).padStart(4, "0");
       const orig = Number(exp.amount || 0);
       const currency = normalizeCurrencyCode(exp.currency) || "THB";
       const thb = Math.round(orig * (rates.get(currency) ?? 1)).toLocaleString();
       const tag = exp.tag || "#ทั่วไป";
       const people = participants(exp, exp.payer_name).join(" ");
-      return `ID ${id} | ${orig.toLocaleString()} ${currency} | ${thb} บาท | ${tag} ${people}`.trim();
-    });
-    return reply(env, replyToken, `รายการล่าสุดที่แก้ได้\n${lines.join("\n")}\n\nพิมพ์: edit [ID] [ยอดใหม่]\nเช่น edit ${String(expenses[expenses.length - 1].id).padStart(4, "0")} 88`);
+      body.push(flexKV(`${id} ${tag}`, `${orig.toLocaleString()} ${currency} = ฿${thb}`));
+      if (people) body.push({ type: "text", text: people, size: "xxs", color: "#aaaaaa", wrap: true });
+    }
+    body.push(flexSep(), { type: "text", text: `แก้ยอด: edit [ID] [ยอดใหม่]\nเช่น edit ${String(expenses[expenses.length - 1].id).padStart(4, "0")} 88`, size: "xs", color: "#888888", wrap: true });
+    return replyAuto(env, replyToken, flexCard({ altText: "รายการล่าสุดที่แก้ได้", title: "แก้ไขรายการ", body }));
   }
   const id = Number(m[1]);
   const amount = Number(m[2]);
@@ -487,14 +490,17 @@ async function handleEndTrip(userId: string, groupId: string | null, replyToken:
   if (!trip) return reply(env, replyToken, "ไม่มีทริปที่กำลังทำงานอยู่");
   const msg = await buildEndTripSummary(env, trip);
   await supabasePatch(env, "trips", { status: "closed", currency_code: getTripBaseCurrency(trip) }, [`id=eq.${trip.id}`]);
-  return reply(env, replyToken, msg);
+  return replyAuto(env, replyToken, msg);
 }
 
 async function handleHistory(userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
   const trips = await supabaseSelect<Trip>(env, "trips", "*", [], "order=created_at.desc&limit=10");
   if (!trips.length) return reply(env, replyToken, "ยังไม่มีประวัติทริป");
   await setState(env, userId, groupId, "export_history", { trips, target_id: targetId });
-  return reply(env, replyToken, "ประวัติทริปล่าสุด\n" + trips.map((t, i) => `${i + 1}. ${t.title || "-"} (${t.status || "-"})`).join("\n") + "\nพิมพ์ excel [เลข] เพื่อ export");
+  const body: FlexNode[] = [flexLabel("เลือกทริปเพื่อ export")];
+  trips.forEach((t, i) => body.push(flexKV(`${i + 1}. ${t.title || "-"}`, t.status || "-")));
+  const buttons = trips.slice(0, 4).map((t, i) => ({ label: `Excel: ${String(t.title || ("ทริป " + (i + 1))).slice(0, 18)}`, text: `excel ${i + 1}` }));
+  return replyAuto(env, replyToken, flexCard({ altText: "ประวัติทริปล่าสุด", title: "ประวัติทริป", body, buttons }));
 }
 
 async function handleExportHistoryChoice(text: string, userId: string, targetId: string, replyToken: string, state: BotState, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -600,11 +606,15 @@ async function runDailySummary(env: Env): Promise<Record<string, unknown>> {
       categories[tag].total += amount;
       for (const p of participants(exp, exp.payer_name)) categories[tag].people.add(p);
     }
-    let msg = `สรุปยอดประจำวัน (${targetDate})\nทริป: ${trip.title}\nยอดรวมทั้งวัน: ${totalThb.toLocaleString()} บาท\n\n`;
-    for (const [tag, data] of Object.entries(categories)) msg += `${tag} ${data.total.toLocaleString()} บาท (${Array.from(data.people).join(" ")})\n`;
+    const dailyBody: FlexNode[] = [flexLabel("ยอดรวมทั้งวัน"), bigTotalNode(totalThb), flexSep(), flexLabel("ตามหมวด")];
+    for (const [tag, data] of Object.entries(categories)) {
+      dailyBody.push(flexKV(tag, `${Math.round(data.total).toLocaleString()} บาท`));
+      const ppl = Array.from(data.people).join(" ");
+      if (ppl) dailyBody.push({ type: "text", text: ppl, size: "xxs", color: "#aaaaaa", wrap: true });
+    }
     const target = trip.line_group_id || trip.creator_id;
     if (target) {
-      await push(env, target, msg.trim());
+      await pushFlex(env, target, flexCard({ altText: `สรุปยอด ${targetDate}: ${Math.round(totalThb).toLocaleString()} บาท`, title: "สรุปยอดประจำวัน", subtitle: `${trip.title} · ${targetDate}`, body: dailyBody }));
       sent++;
     }
     await supabaseUpsert(env, "daily_summaries", { trip_id: trip.id, summary_date: targetDate, total_thb: totalThb, details: Object.fromEntries(Object.entries(categories).map(([k, v]) => [k, { total_thb: v.total, participants: Array.from(v.people) }])) }, "trip_id,summary_date");
@@ -632,6 +642,73 @@ async function replyMessages(env: Env, replyToken: string, messages: unknown[]):
 
 async function push(env: Env, to: string, text: string): Promise<void> {
   await lineFetch(env, "/v2/bot/message/push", { to, messages: [{ type: "text", text: truncateLineText(text) }] });
+}
+
+async function pushFlex(env: Env, to: string, flex: Record<string, unknown>): Promise<void> {
+  await lineFetch(env, "/v2/bot/message/push", { to, messages: [flex] });
+}
+
+// ส่งแบบยืดหยุ่น: ถ้าเป็น object = Flex card, ถ้าเป็น string = ข้อความ
+async function replyAuto(env: Env, replyToken: string, msg: string | Record<string, unknown>): Promise<void> {
+  if (typeof msg === "string") await reply(env, replyToken, msg);
+  else await replyFlex(env, replyToken, msg);
+}
+
+// ===== Flex helpers (การ์ดหัวสีม่วงให้เข้ากับเมนู showtime เดิม) =====
+const FLEX_ACCENT = "#7C3AED";
+
+type FlexNode = Record<string, unknown>;
+
+function flexKV(label: string, value: string, opts: { valueColor?: string; bold?: boolean } = {}): FlexNode {
+  return {
+    type: "box", layout: "horizontal", contents: [
+      { type: "text", text: label, size: "sm", color: "#666666", flex: 5, wrap: true },
+      { type: "text", text: value, size: "sm", color: opts.valueColor || "#222222", weight: opts.bold ? "bold" : "regular", align: "end", flex: 4, wrap: true },
+    ],
+  };
+}
+
+function flexLabel(text: string): FlexNode {
+  return { type: "text", text, size: "xs", color: "#999999", margin: "md" };
+}
+
+function flexSep(): FlexNode {
+  return { type: "separator", margin: "md" };
+}
+
+function flexCard(opts: { altText: string; title: string; subtitle?: string; body: FlexNode[]; buttons?: Array<{ label: string; text: string }> }): FlexNode {
+  const header: FlexNode = {
+    type: "box", layout: "vertical", backgroundColor: FLEX_ACCENT, paddingAll: "14px",
+    contents: [
+      { type: "text", text: opts.title, color: "#FFFFFF", weight: "bold", size: "lg", wrap: true },
+      ...(opts.subtitle ? [{ type: "text", text: opts.subtitle, color: "#E9E2FB", size: "xs", margin: "sm", wrap: true }] : []),
+    ],
+  };
+  const bubble: FlexNode = {
+    type: "bubble", size: "mega",
+    header,
+    body: { type: "box", layout: "vertical", spacing: "sm", contents: opts.body },
+  };
+  if (opts.buttons?.length) {
+    bubble.footer = {
+      type: "box", layout: "vertical", spacing: "sm", flex: 0,
+      contents: opts.buttons.map((b, i) => ({
+        type: "button", style: i === 0 ? "primary" : "secondary", color: i === 0 ? FLEX_ACCENT : undefined, height: "sm",
+        action: { type: "message", label: b.label, text: b.text },
+      })),
+    };
+  }
+  return { type: "flex", altText: opts.altText.slice(0, 400), contents: bubble };
+}
+
+function buildSaveCard(opts: { amount: number; currency: string; tag?: string | null; people: string[]; payer?: string; id?: number | string | null; prefix?: string }): FlexNode {
+  const body: FlexNode[] = [];
+  if (opts.prefix) body.push({ type: "text", text: opts.prefix, size: "xs", color: "#888888", wrap: true });
+  body.push(flexLabel("บันทึกแล้ว"), { type: "text", text: `${opts.amount.toLocaleString()} ${opts.currency}`, size: "xxl", weight: "bold", color: "#222222" });
+  if (opts.payer) body.push(flexKV("ผู้จ่าย", opts.payer));
+  body.push(flexKV("หาร", opts.people.join(" ") || "-"));
+  if (opts.id != null) body.push({ type: "text", text: `แก้ยอด: edit ${String(opts.id).padStart(4, "0")} [ยอดใหม่]`, size: "xxs", color: "#aaaaaa", margin: "md", wrap: true });
+  return flexCard({ altText: `บันทึก ${opts.amount.toLocaleString()} ${opts.currency}`, title: "บันทึกรายการ", subtitle: opts.tag || undefined, body });
 }
 
 async function lineFetch(env: Env, path: string, body: unknown): Promise<any> {
@@ -995,66 +1072,118 @@ function expenseThbLive(exp: Expense, rates: Map<string, number>): number {
   return Number(exp.amount || 0) * (rates.get(cur) ?? 1);
 }
 
-async function buildTripTotalMessage(env: Env, userId: string, groupId: string | null): Promise<string> {
+// body ของการ์ดสรุป: ยอดตามสกุล + ตามหมวด (THB สด)
+function summaryCardBody(expenses: Expense[], rates: Map<string, number>): { body: FlexNode[]; grandThb: number } {
+  const byCur: Record<string, { orig: number; thb: number }> = {};
+  let grandThb = 0;
+  for (const e of expenses) {
+    const cur = normalizeCurrencyCode(e.currency) || "THB";
+    const orig = Number(e.amount || 0);
+    const thb = orig * (rates.get(cur) ?? 1);
+    (byCur[cur] ||= { orig: 0, thb: 0 }).orig += orig;
+    byCur[cur].thb += thb;
+    grandThb += thb;
+  }
+  const body: FlexNode[] = [flexLabel("ยอดตามสกุล")];
+  for (const [cur, v] of Object.entries(byCur).sort(([a], [b]) => a.localeCompare(b))) {
+    body.push(flexKV(`${v.orig.toLocaleString()} ${cur}`, `${Math.round(v.thb).toLocaleString()} บาท`));
+  }
+  const categories: CategoryAgg = {};
+  for (const e of expenses) addCategory(categories, e, rates);
+  const catEntries = Object.entries(categories).sort(([a], [b]) => a.localeCompare(b, "th"));
+  if (catEntries.length) {
+    body.push(flexSep(), flexLabel("ตามหมวด"));
+    for (const [tag, data] of catEntries) {
+      const orig = Object.entries(data.byCur).sort(([a], [b]) => a.localeCompare(b)).map(([c, a2]) => `${a2.toLocaleString()} ${c}`).join(" + ");
+      body.push(flexKV(`${tag} (${orig})`, `${Math.round(data.thb).toLocaleString()} บาท`));
+      const ppl = Array.from(data.people).sort((a, b) => a.localeCompare(b, "th")).join(" ");
+      if (ppl) body.push({ type: "text", text: ppl, size: "xxs", color: "#aaaaaa", wrap: true });
+    }
+  }
+  return { body, grandThb };
+}
+
+function bigTotalNode(grandThb: number): FlexNode {
+  return { type: "text", text: `฿${Math.round(grandThb).toLocaleString()}`, size: "xxl", weight: "bold", color: "#222222" };
+}
+
+async function buildTripTotalMessage(env: Env, userId: string, groupId: string | null): Promise<string | FlexNode> {
   const trip = await getActiveTrip(env, userId, groupId);
   if (!trip) return "ไม่มีทริปที่กำลังทำงานอยู่";
   const expenses = await getAllExpenses(env, trip.id);
   if (!expenses.length) return "ยังไม่มีรายการค่าใช้จ่าย";
   const rates = await getRatesForCurrencies(env, expenses.map((e) => e.currency || "THB"));
-  const { lines, grandThb } = summarizeByCurrency(expenses, rates);
-  const categories: CategoryAgg = {};
-  for (const exp of expenses) addCategory(categories, exp, rates);
-  return `ยอดรวมทริป: ${trip.title}\n${lines.join("\n")}\nรวม ${Math.round(grandThb).toLocaleString()} บาท\n\n${formatCategorySummary(categories)}`;
+  const { body, grandThb } = summaryCardBody(expenses, rates);
+  return flexCard({
+    altText: `ยอดรวมทริป ${trip.title}: ${Math.round(grandThb).toLocaleString()} บาท`,
+    title: "ยอดรวมทริป",
+    subtitle: trip.title,
+    body: [flexLabel("ยอดรวมทั้งทริป"), bigTotalNode(grandThb), flexSep(), ...body],
+    buttons: [{ label: "ดาวน์โหลด Excel", text: "excel" }, { label: "ยอดวันนี้", text: "ยอดวันนี้" }],
+  });
 }
 
-async function buildTodayMessage(env: Env, userId: string, groupId: string | null): Promise<string> {
+async function buildTodayMessage(env: Env, userId: string, groupId: string | null): Promise<string | FlexNode> {
   const trip = await getActiveTrip(env, userId, groupId);
   if (!trip) return "ไม่มีทริปที่กำลังทำงานอยู่";
   const today = thaiDateString(new Date());
   const expenses = (await getAllExpenses(env, trip.id)).filter((e) => thaiDateFromIso(e.created_at || "") === today);
   if (!expenses.length) return `วันนี้ (${today}) ยังไม่มีรายจ่าย`;
   const rates = await getRatesForCurrencies(env, expenses.map((e) => e.currency || "THB"));
-  const { lines, grandThb } = summarizeByCurrency(expenses, rates);
-  const categories: CategoryAgg = {};
-  for (const e of expenses) addCategory(categories, e, rates);
-  return `ยอดวันนี้ (${today})\n${lines.join("\n")}\nรวมวันนี้: ${Math.round(grandThb).toLocaleString()} บาท\n\n${formatCategorySummary(categories)}`;
+  const { body, grandThb } = summaryCardBody(expenses, rates);
+  return flexCard({
+    altText: `ยอดวันนี้ ${today}: ${Math.round(grandThb).toLocaleString()} บาท`,
+    title: "ยอดวันนี้",
+    subtitle: `${trip.title} · ${today}`,
+    body: [flexLabel("รวมวันนี้"), bigTotalNode(grandThb), flexSep(), ...body],
+    buttons: [{ label: "ยอดรวมทริป", text: "ยอด" }],
+  });
 }
 
-async function buildEndTripSummary(env: Env, trip: Trip): Promise<string> {
+async function buildEndTripSummary(env: Env, trip: Trip): Promise<string | FlexNode> {
   const expenses = await getAllExpenses(env, trip.id);
   if (!expenses.length) return `ทริป: ${trip.title}\nไม่มีรายการค่าใช้จ่ายให้หาร`;
   let total = 0;
-  const categoryTotals: Record<string, Record<string, number>> = {};
   const totalByPerson: Record<string, number> = {};
   const paidByPerson: Record<string, number> = {};
   const rates = await getRatesForCurrencies(env, expenses.map((e) => e.currency || "THB"));
   for (const exp of expenses) {
     const amount = expenseThbLive(exp, rates);
     total += amount;
-    const tag = exp.tag || "#ทั่วไป";
     const people = participants(exp, exp.payer_name);
     const share = amount / Math.max(people.length, 1);
-    categoryTotals[tag] ||= {};
-    for (const p of people) {
-      categoryTotals[tag][p] = (categoryTotals[tag][p] || 0) + share;
-      totalByPerson[p] = (totalByPerson[p] || 0) + share;
-    }
+    for (const p of people) totalByPerson[p] = (totalByPerson[p] || 0) + share;
     const payerName = String(exp.payer_name || "").trim();
     if (payerName) paidByPerson[payerName] = (paidByPerson[payerName] || 0) + amount;
   }
-  let msg = `ทริป: ${trip.title}\n\nยอดต้องจ่ายตามหมวด:\n`;
-  for (const [tag, rows] of Object.entries(categoryTotals)) msg += `${tag}\n${Object.entries(rows).sort().map(([p, v]) => `- ${p}: ${v.toLocaleString()} บาท`).join("\n")}\n`;
-  msg += `\nยอดรวมทั้งทริป: ${total.toLocaleString()} บาท\n` + Object.entries(totalByPerson).sort().map(([p, v]) => `${p}: ${v.toLocaleString()} บาท`).join("\n");
 
-  const paidLines = Object.entries(paidByPerson).sort().map(([p, v]) => `- ${p}: ${fmt2(v)} บาท`);
-  if (paidLines.length) msg += `\n\nจ่ายไปแล้ว:\n${paidLines.join("\n")}`;
+  const body: FlexNode[] = [flexLabel("ยอดรวมทั้งทริป"), bigTotalNode(total)];
+
+  body.push(flexSep(), flexLabel("ต้องจ่าย (ต่อคน)"));
+  for (const [p, v] of Object.entries(totalByPerson).sort()) body.push(flexKV(p, `${fmt2(v)} บาท`));
+
+  const paidEntries = Object.entries(paidByPerson).sort();
+  if (paidEntries.length) {
+    body.push(flexSep(), flexLabel("จ่ายไปแล้ว"));
+    for (const [p, v] of paidEntries) body.push(flexKV(p, `${fmt2(v)} บาท`));
+  }
+
+  body.push(flexSep(), flexLabel("สรุปโอนเงิน 💸"));
   const transfers = computeSettlement(paidByPerson, totalByPerson);
   if (transfers.length) {
-    msg += `\n\nสรุปโอนเงิน 💸\n` + transfers.map((t) => `- ${t.from} → ${t.to}: ${fmt2(t.amount)} บาท`).join("\n");
-  } else if (paidLines.length) {
-    msg += `\n\nสรุปโอนเงิน 💸\nไม่มียอดต้องโอน (จ่ายตรงกับที่ต้องจ่าย)`;
+    for (const t of transfers) body.push(flexKV(`${t.from} → ${t.to}`, `${fmt2(t.amount)} บาท`, { bold: true, valueColor: FLEX_ACCENT }));
+  } else {
+    body.push({ type: "text", text: "ไม่มียอดต้องโอน (จ่ายตรงกับที่ต้องจ่าย)", size: "sm", color: "#666666", wrap: true });
   }
-  return msg;
+
+  const dateSub = trip.start_date ? `${String(trip.start_date).slice(0, 10)}${trip.end_date ? ` ถึง ${String(trip.end_date).slice(0, 10)}` : ""}` : "";
+  return flexCard({
+    altText: `จบทริป ${trip.title}: รวม ${Math.round(total).toLocaleString()} บาท`,
+    title: "จบทริป",
+    subtitle: dateSub ? `${trip.title} · ${dateSub}` : trip.title,
+    body,
+    buttons: [{ label: "ดาวน์โหลด Excel", text: "excel" }],
+  });
 }
 
 function fmt2(n: number): string {
@@ -1240,6 +1369,17 @@ function buildShowtimeMenuFlex(): Record<string, unknown> {
       },
     },
   };
+}
+
+async function buildShowtimeCard(env: Env, eventName: string): Promise<FlexNode> {
+  const st = await loadShowtime(env, eventName);
+  const body: FlexNode[] = [];
+  if (st.schedule.length) {
+    for (const it of st.schedule) body.push({ type: "text", text: `${it.time || "-"}  ${it.artist || ""}`.trim(), size: "sm", color: "#222222", wrap: true });
+  } else {
+    body.push({ type: "text", text: "ยังไม่มีข้อมูล Showtime", size: "sm", color: "#666666" });
+  }
+  return flexCard({ altText: `Showtime ${eventName}`, title: eventName, subtitle: `วันที่จัดแสดง: ${st.show_date || "ไม่ระบุ"}`, body });
 }
 
 async function formatShowtimeMessage(env: Env, eventName: string): Promise<string> {
