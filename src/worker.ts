@@ -202,7 +202,7 @@ async function handleImage(messageId: string, userId: string, groupId: string | 
   const current = state?.action === "wait_slip_payer" ? ((state.payload.message_ids as string[]) || []) : [];
   current.push(messageId);
   await setState(env, userId, groupId, "wait_slip_payer", { message_ids: current, trip_id: trip.id, base_currency: getTripBaseCurrency(trip), target_id: targetId });
-  return reply(env, replyToken, `รับสลิป/บิลแล้ว (${current.length} ใบ)\nพิมพ์ #หมวด ตามด้วยชื่อ เช่น #ค่าอาหาร บอล ปาค`);
+  return reply(env, replyToken, `รับสลิป/บิลแล้ว (${current.length} ใบ)\nพิมพ์ ผู้จ่าย #หมวด คนหาร...\nเช่น บอล #ค่าอาหาร บอล ปาค`);
 }
 
 function waitUntilShowtimeImageOcr(ctx: ExecutionContext, env: Env, messageId: string, userId: string, groupId: string | null, targetId: string): void {
@@ -735,39 +735,58 @@ async function getDisplayName(env: Env, userId: string, groupId: string | null):
   }
 }
 
-function parseExpense(text: string, defaultPayer: string, defaultCurrency = "THB") {
+// รูปแบบ canonical: <ผู้จ่าย> #หมวด <ยอด> [สกุล] <คนหาร...>
+// (#หมวด แทน "รายการ"; ชื่อแรกก่อนยอด = ผู้จ่าย, ชื่อหลังยอด = คนหาร)
+export function parseExpense(text: string, defaultPayer: string, defaultCurrency = "THB") {
   const parts = text.split(/\s+/).filter(Boolean);
   const amtIdx = parts.findIndex((p) => /^\d+(?:\.\d{1,2})?$/.test(p.replace(/,/g, "")));
   if (amtIdx < 0) return null;
   const amount = Number(parts[amtIdx].replace(/,/g, ""));
-  let cursor = amtIdx + 1;
-  const inlineCurrency = normalizeCurrency(parts[cursor] || "");
+
+  // สกุลเงิน: รับ strict 4 ตัวถ้าอยู่ติดหลังยอด (กันชื่อเล่นชนรหัสสกุล), มิฉะนั้นใช้สกุลทริป
+  let afterStart = amtIdx + 1;
+  const inlineCurrency = normalizeCurrency(parts[afterStart] || "");
   const fallbackCurrency = ISO_4217.has(normalizeCurrencyCode(defaultCurrency))
     ? normalizeCurrencyCode(defaultCurrency)
     : "THB";
-  let currency = inlineCurrency || fallbackCurrency;
-  if (inlineCurrency) cursor++;
+  const currency = inlineCurrency || fallbackCurrency;
+  if (inlineCurrency) afterStart++;
+
+  // เก็บ tag (token แรกที่ขึ้นต้น #) + ชื่อก่อน/หลังยอด
   let tag: string | null = null;
-  if ((parts[cursor] || "").startsWith("#")) tag = parts[cursor++];
-  const people = parts.slice(cursor);
-  const before = parts.slice(0, amtIdx);
-  const payer = before.length >= 2 ? before[0] : defaultPayer;
-  const item = before.length >= 2 ? before.slice(1).join(" ") : before[0] || "ค่าใช้จ่าย";
-  if (!people.length) return null;
-  return { payer, item, amount, currency, tag, participants: people };
+  const before: string[] = [];
+  for (let k = 0; k < amtIdx; k++) {
+    const t = parts[k];
+    if (t.startsWith("#")) { if (!tag) tag = t; continue; }
+    before.push(t);
+  }
+  const after: string[] = [];
+  for (let k = afterStart; k < parts.length; k++) {
+    const t = parts[k];
+    if (t.startsWith("#")) { if (!tag) tag = t; continue; }
+    after.push(t);
+  }
+  const payer = before.length ? before[0] : defaultPayer;
+  const participants = after;
+  if (!participants.length) return null;
+  const item = tag ? tag.replace(/^#/, "") : "ค่าใช้จ่าย";
+  return { payer, item, amount, currency, tag, participants };
 }
 
-function parseSlipAssignment(text: string) {
+// รูปแบบ slip: <ผู้จ่าย> #หมวด <คนหาร...> (ชื่อแรก = ผู้จ่าย, ที่เหลือ = คนหาร)
+export function parseSlipAssignment(text: string) {
   const tokens = text.split(/\s+/).filter(Boolean);
   let tag: string | null = null;
   let currency: string | null = null;
-  const people: string[] = [];
+  const names: string[] = [];
   for (const token of tokens) {
     if (token.startsWith("#") && !tag) tag = token;
     else if (normalizeCurrency(token) && !currency) currency = normalizeCurrency(token);
-    else people.push(token);
+    else names.push(token);
   }
-  return { payer: people.join(" "), participants: people, tag, currency };
+  const payer = names[0] || "";
+  const participants = names.slice(1);
+  return { payer, participants, tag, currency };
 }
 
 function parsePositiveAmount(text: string): number | null {
@@ -958,6 +977,7 @@ async function buildEndTripSummary(env: Env, trip: Trip): Promise<string> {
   let total = 0;
   const categoryTotals: Record<string, Record<string, number>> = {};
   const totalByPerson: Record<string, number> = {};
+  const paidByPerson: Record<string, number> = {};
   const rates = await getRatesForCurrencies(env, expenses.map((e) => e.currency || "THB"));
   for (const exp of expenses) {
     const amount = expenseThbLive(exp, rates);
@@ -970,11 +990,55 @@ async function buildEndTripSummary(env: Env, trip: Trip): Promise<string> {
       categoryTotals[tag][p] = (categoryTotals[tag][p] || 0) + share;
       totalByPerson[p] = (totalByPerson[p] || 0) + share;
     }
+    const payerName = String(exp.payer_name || "").trim();
+    if (payerName) paidByPerson[payerName] = (paidByPerson[payerName] || 0) + amount;
   }
   let msg = `ทริป: ${trip.title}\n\nยอดต้องจ่ายตามหมวด:\n`;
   for (const [tag, rows] of Object.entries(categoryTotals)) msg += `${tag}\n${Object.entries(rows).sort().map(([p, v]) => `- ${p}: ${v.toLocaleString()} บาท`).join("\n")}\n`;
   msg += `\nยอดรวมทั้งทริป: ${total.toLocaleString()} บาท\n` + Object.entries(totalByPerson).sort().map(([p, v]) => `${p}: ${v.toLocaleString()} บาท`).join("\n");
+
+  const paidLines = Object.entries(paidByPerson).sort().map(([p, v]) => `- ${p}: ${fmt2(v)} บาท`);
+  if (paidLines.length) msg += `\n\nจ่ายไปแล้ว:\n${paidLines.join("\n")}`;
+  const transfers = computeSettlement(paidByPerson, totalByPerson);
+  if (transfers.length) {
+    msg += `\n\nสรุปโอนเงิน 💸\n` + transfers.map((t) => `- ${t.from} → ${t.to}: ${fmt2(t.amount)} บาท`).join("\n");
+  } else if (paidLines.length) {
+    msg += `\n\nสรุปโอนเงิน 💸\nไม่มียอดต้องโอน (จ่ายตรงกับที่ต้องจ่าย)`;
+  }
   return msg;
+}
+
+function fmt2(n: number): string {
+  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// จับคู่ลูกหนี้-เจ้าหนี้ให้จำนวนการโอนน้อยที่สุด (greedy)
+export function computeSettlement(
+  paid: Record<string, number>,
+  owed: Record<string, number>,
+): Array<{ from: string; to: string; amount: number }> {
+  const names = new Set([...Object.keys(paid), ...Object.keys(owed)]);
+  const creditors: Array<{ name: string; amt: number }> = [];
+  const debtors: Array<{ name: string; amt: number }> = [];
+  for (const n of names) {
+    const net = (paid[n] || 0) - (owed[n] || 0);
+    if (net > 0.01) creditors.push({ name: n, amt: net });
+    else if (net < -0.01) debtors.push({ name: n, amt: -net });
+  }
+  creditors.sort((a, b) => b.amt - a.amt);
+  debtors.sort((a, b) => b.amt - a.amt);
+  const transfers: Array<{ from: string; to: string; amount: number }> = [];
+  let i = 0;
+  let j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const pay = Math.min(debtors[i].amt, creditors[j].amt);
+    transfers.push({ from: debtors[i].name, to: creditors[j].name, amount: pay });
+    debtors[i].amt -= pay;
+    creditors[j].amt -= pay;
+    if (debtors[i].amt < 0.01) i++;
+    if (creditors[j].amt < 0.01) j++;
+  }
+  return transfers;
 }
 
 async function findSimilarPeopleNames(env: Env, tripId: string, names: string[]): Promise<Array<[string, string]>> {
@@ -1176,7 +1240,7 @@ function buildStateText(state: BotState | null): string {
 }
 
 function buildHelpText(): string {
-  return "คำสั่ง: ทริป, ยอด, ยอดวันนี้, edit [id] [ยอด], history, excel, end trip, showtime\nเพิ่มรายจ่าย: รายการ 120 #หมวด ชื่อ1 ชื่อ2\nสลิป: ส่งรูป แล้วพิมพ์ #หมวด ชื่อ1 ชื่อ2";
+  return "คำสั่ง: ทริป, ยอด, ยอดวันนี้, edit [id] [ยอด], history, excel, end trip, showtime\nเพิ่มรายจ่าย: ผู้จ่าย #หมวด ยอด คนหาร...\nเช่น บอล #ค่าข้าว 120 บอล ปาค มิน\nสลิป: ส่งรูป แล้วพิมพ์ ผู้จ่าย #หมวด คนหาร...";
 }
 
 function buildHelpFlex(): Record<string, unknown> {
