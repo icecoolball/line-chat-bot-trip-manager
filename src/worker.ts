@@ -411,13 +411,16 @@ async function handleEditExpense(text: string, userId: string, groupId: string |
     if (!trip) return reply(env, replyToken, "ไม่มีทริปที่กำลังทำงานอยู่");
     const expenses = await getAllExpenses(env, trip.id);
     if (!expenses.length) return reply(env, replyToken, "ยังไม่มีรายการค่าใช้จ่ายให้แก้ไข");
-    const lines = expenses.slice(-10).reverse().map((exp) => {
+    const recent = expenses.slice(-10).reverse();
+    const rates = await getRatesForCurrencies(env, recent.map((e) => e.currency || "THB"));
+    const lines = recent.map((exp) => {
       const id = String(exp.id).padStart(4, "0");
-      const amount = Number(exp.amount || 0).toLocaleString();
-      const currency = exp.currency || "THB";
+      const orig = Number(exp.amount || 0);
+      const currency = normalizeCurrencyCode(exp.currency) || "THB";
+      const thb = Math.round(orig * (rates.get(currency) ?? 1)).toLocaleString();
       const tag = exp.tag || "#ทั่วไป";
       const people = participants(exp, exp.payer_name).join(" ");
-      return `ID ${id} | ${amount} ${currency} | ${tag} ${people}`.trim();
+      return `ID ${id} | ${orig.toLocaleString()} ${currency} | ${thb} บาท | ${tag} ${people}`.trim();
     });
     return reply(env, replyToken, `รายการล่าสุดที่แก้ได้\n${lines.join("\n")}\n\nพิมพ์: edit [ID] [ยอดใหม่]\nเช่น edit ${String(expenses[expenses.length - 1].id).padStart(4, "0")} 88`);
   }
@@ -871,19 +874,28 @@ function formatMoneyLines(values: Record<string, number>): string {
   return entries.length ? entries.map(([name, amount]) => `${name}: ${amount.toLocaleString()} บาท`).join("\n") : "-";
 }
 
-function addCategory(categories: Record<string, { total: number; people: Set<string> }>, exp: Expense, amount: number): void {
+type CategoryAgg = Record<string, { byCur: Record<string, number>; thb: number; people: Set<string> }>;
+
+function addCategory(categories: CategoryAgg, exp: Expense, rates: Map<string, number>): void {
   const tag = exp.tag || "#ทั่วไป";
-  categories[tag] ||= { total: 0, people: new Set() };
-  categories[tag].total += amount;
+  const cur = normalizeCurrencyCode(exp.currency) || "THB";
+  const orig = Number(exp.amount || 0);
+  categories[tag] ||= { byCur: {}, thb: 0, people: new Set() };
+  categories[tag].byCur[cur] = (categories[tag].byCur[cur] || 0) + orig;
+  categories[tag].thb += orig * (rates.get(cur) ?? 1);
   for (const p of participants(exp, exp.payer_name)) categories[tag].people.add(p);
 }
 
-function formatCategorySummary(categories: Record<string, { total: number; people: Set<string> }>): string {
+function formatCategorySummary(categories: CategoryAgg): string {
   return Object.entries(categories)
     .sort(([a], [b]) => a.localeCompare(b, "th"))
     .map(([tag, data]) => {
+      const orig = Object.entries(data.byCur)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([cur, amt]) => `${amt.toLocaleString()} ${cur}`)
+        .join(" + ");
       const people = Array.from(data.people).sort((a, b) => a.localeCompare(b, "th")).join(" ");
-      return `${tag} ${data.total.toLocaleString()} บาท ${people}`.trim();
+      return `${tag} ${orig} | ${Math.round(data.thb).toLocaleString()} บาท | ${people}`.trim();
     })
     .join("\n") || "-";
 }
@@ -922,8 +934,8 @@ async function buildTripTotalMessage(env: Env, userId: string, groupId: string |
   if (!expenses.length) return "ยังไม่มีรายการค่าใช้จ่าย";
   const rates = await getRatesForCurrencies(env, expenses.map((e) => e.currency || "THB"));
   const { lines, grandThb } = summarizeByCurrency(expenses, rates);
-  const categories: Record<string, { total: number; people: Set<string> }> = {};
-  for (const exp of expenses) addCategory(categories, exp, expenseThbLive(exp, rates));
+  const categories: CategoryAgg = {};
+  for (const exp of expenses) addCategory(categories, exp, rates);
   return `ยอดรวมทริป: ${trip.title}\n${lines.join("\n")}\nรวม ${Math.round(grandThb).toLocaleString()} บาท\n\n${formatCategorySummary(categories)}`;
 }
 
@@ -935,8 +947,8 @@ async function buildTodayMessage(env: Env, userId: string, groupId: string | nul
   if (!expenses.length) return `วันนี้ (${today}) ยังไม่มีรายจ่าย`;
   const rates = await getRatesForCurrencies(env, expenses.map((e) => e.currency || "THB"));
   const { lines, grandThb } = summarizeByCurrency(expenses, rates);
-  const categories: Record<string, { total: number; people: Set<string> }> = {};
-  for (const e of expenses) addCategory(categories, e, expenseThbLive(e, rates));
+  const categories: CategoryAgg = {};
+  for (const e of expenses) addCategory(categories, e, rates);
   return `ยอดวันนี้ (${today})\n${lines.join("\n")}\nรวมวันนี้: ${Math.round(grandThb).toLocaleString()} บาท\n\n${formatCategorySummary(categories)}`;
 }
 
