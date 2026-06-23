@@ -199,9 +199,17 @@ def main():
                 "หาร": " ".join(map(str, participants)),
             })
 
-        df = pd.DataFrame(rows)
+        # จัดกลุ่มรายการตามวันที่ (1 วัน = 1 ชีต)
+        EXPENSE_COLS = [
+            "ชื่อทริป", "วันที่", "เวลา", "ชื่อผู้จ่าย", "รายการ", "จำนวนเงิน",
+            "สกุล", "ยอดเทียบบาท", "เรทที่ใช้", "ที่มาเรท", "หมวดหมู่", "หาร",
+        ]
+        by_date = {}
+        for r in rows:
+            by_date.setdefault(r.get("วันที่") or "ไม่ระบุวันที่", []).append(r)
+        day_order = sorted(by_date.keys())
 
-        # ตารางสรุปแปลงเป็นบาทด้านท้าย
+        # ตารางสรุปแปลงเป็นบาท (ทั้งทริป)
         summary_rows = []
         for curr, agg in currency_totals.items():
             summary_rows.append({
@@ -217,6 +225,14 @@ def main():
             "ยอดรวมเทียบบาท": round(grand_thb, 2),
         })
         summary_df = pd.DataFrame(summary_rows)
+
+        # ตารางสรุปรายวัน (ยอดรวมบาทต่อวัน)
+        daily_rows = []
+        for d in day_order:
+            day_thb = sum(float(r.get("ยอดเทียบบาท") or 0) for r in by_date[d])
+            daily_rows.append({"วันที่": d, "ยอดรวม (บาท)": round(day_thb, 2)})
+        daily_rows.append({"วันที่": "รวมทั้งหมด", "ยอดรวม (บาท)": round(grand_thb, 2)})
+        daily_df = pd.DataFrame(daily_rows)
 
         # ตาราง "จ่ายไปแล้ว" (ใครออกเงินจริงเท่าไร)
         paid_df = pd.DataFrame(
@@ -236,20 +252,41 @@ def main():
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
             tmp_path = tmp.name
 
-        def write_block(writer, title, block_df, start):
+        used_sheets = set()
+
+        def safe_sheet(name):
+            s = "".join(c for c in str(name) if c not in "[]:*?/\\")[:31] or "วันที่"
+            base, k = s, 2
+            while s in used_sheets:
+                s = f"{base[:28]}_{k}"
+                k += 1
+            used_sheets.add(s)
+            return s
+
+        def write_block(writer, sheet, title, block_df, start):
             pd.DataFrame([{"_": title}]).to_excel(
-                writer, index=False, header=False, sheet_name="Expenses", startrow=start, startcol=0
+                writer, index=False, header=False, sheet_name=sheet, startrow=start, startcol=0
             )
-            block_df.to_excel(writer, index=False, sheet_name="Expenses", startrow=start + 1)
+            block_df.to_excel(writer, index=False, sheet_name=sheet, startrow=start + 1)
             return start + 1 + len(block_df) + 1 + 1  # หัวข้อ + header + แถว + เว้น 1 บรรทัด
 
         with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Expenses")
-            ptr = len(df) + 2  # เว้น 1 บรรทัดหลังตารางหลัก
-            ptr = write_block(writer, "สรุปแปลงเป็นบาท", summary_df, ptr)
+            # 1 วัน = 1 ชีต (ชื่อชีต = วันที่)
+            for d in day_order:
+                sheet = safe_sheet(d)
+                day_df = pd.DataFrame(by_date[d], columns=EXPENSE_COLS)
+                day_df.to_excel(writer, index=False, sheet_name=sheet)
+                day_thb = sum(float(r.get("ยอดเทียบบาท") or 0) for r in by_date[d])
+                pd.DataFrame([{"_": "รวมวันนี้ (บาท)", "__": round(day_thb, 2)}]).to_excel(
+                    writer, index=False, header=False, sheet_name=sheet, startrow=len(day_df) + 2, startcol=0
+                )
+            # ชีตสุดท้าย: รวมทุกวัน
+            summary_sheet = safe_sheet("รวมทุกวัน")
+            ptr = write_block(writer, summary_sheet, "สรุปรายวัน", daily_df, 0)
+            ptr = write_block(writer, summary_sheet, "สรุปแปลงเป็นบาท", summary_df, ptr)
             if not paid_df.empty:
-                ptr = write_block(writer, "จ่ายไปแล้ว", paid_df, ptr)
-            write_block(writer, "สรุปโอนเงิน", settle_df, ptr)
+                ptr = write_block(writer, summary_sheet, "จ่ายไปแล้ว", paid_df, ptr)
+            write_block(writer, summary_sheet, "สรุปโอนเงิน", settle_df, ptr)
 
         with open(tmp_path, "rb") as f:
             supabase.storage.from_("trip-exports").upload(
