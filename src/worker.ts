@@ -118,6 +118,7 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
   const text = rawText.trim();
   const lower = text.toLowerCase();
   const state = await getState(env, userId);
+  DEFAULT_QUICK = state?.action === "export_history" ? qr([["✖️ ออก", "exit", "cancel"]]) : QR_MAIN;
 
   if (lower === "state") return reply(env, replyToken, buildStateText(state));
   if (["menu", "เมนู"].includes(lower)) return replyFlex(env, replyToken, buildMainMenuFlex(), QR_MAIN);
@@ -198,6 +199,7 @@ async function handleTripCurrency(text: string, userId: string, groupId: string 
 }
 
 async function handlePostback(event: any, userId: string, groupId: string | null, replyToken: string, env: Env): Promise<void> {
+  DEFAULT_QUICK = QR_MAIN;
   const data = new URLSearchParams(String(event.postback?.data || ""));
   const stage = data.get("trip_date");
   if (stage !== "start" && stage !== "end") return;
@@ -331,6 +333,7 @@ export function parseTripDates(text: string): { start: string | null; end: strin
 }
 
 async function handleImage(messageId: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env, ctx: ExecutionContext): Promise<void> {
+  DEFAULT_QUICK = QR_MAIN;
   const state = await getState(env, userId);
   if (state && SHOWTIME_ACTIONS.has(state.action)) {
     waitUntilShowtimeImageOcr(ctx, env, messageId, userId, groupId, targetId);
@@ -778,19 +781,25 @@ async function verifyLineSignature(body: string, signature: string, secret: stri
   return btoa(String.fromCharCode(...new Uint8Array(digest))) === signature;
 }
 
+// เมนู Quick Reply ตั้งต้นต่อ event — ตั้งตอนเริ่มจัดการแต่ละข้อความ
+// ทำให้ "ทุก reply" มีปุ่มเมนูติดเสมอ (ปุ่มเฉพาะโหมดที่ส่งมาเองยัง override ได้)
+let DEFAULT_QUICK: Record<string, unknown> | undefined;
+
 async function reply(env: Env, replyToken: string, text: string, quick?: Record<string, unknown>): Promise<void> {
+  const q = quick ?? DEFAULT_QUICK;
   const msg: Record<string, unknown> = { type: "text", text: truncateLineText(text) };
-  if (quick) msg.quickReply = quick;
+  if (q) msg.quickReply = q;
   await replyMessages(env, replyToken, [msg]);
 }
 
 async function replyFlex(env: Env, replyToken: string, flex: Record<string, unknown>, quick?: Record<string, unknown>): Promise<void> {
-  const message = quick ? { ...flex, quickReply: quick } : flex;
+  const q = quick ?? DEFAULT_QUICK;
+  const message = q ? { ...flex, quickReply: q } : flex;
   try {
     await replyMessages(env, replyToken, [message]);
   } catch (error) {
     console.error("replyFlex failed, falling back to text", errorMessage(error));
-    await reply(env, replyToken, String(flex.altText || "ส่งการ์ดไม่ได้ ลองใหม่อีกครั้ง"), quick);
+    await reply(env, replyToken, String(flex.altText || "ส่งการ์ดไม่ได้ ลองใหม่อีกครั้ง"), q);
   }
 }
 
