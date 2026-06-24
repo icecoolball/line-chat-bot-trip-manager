@@ -120,8 +120,8 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
   const state = await getState(env, userId);
 
   if (lower === "state") return reply(env, replyToken, buildStateText(state));
-  if (["menu", "เมนู"].includes(lower)) return replyFlex(env, replyToken, buildMainMenuFlex());
-  if (["help", "ช่วยเหลือ"].includes(lower)) return replyFlex(env, replyToken, buildHelpFlex());
+  if (["menu", "เมนู"].includes(lower)) return replyFlex(env, replyToken, buildMainMenuFlex(), QR_MAIN);
+  if (["help", "ช่วยเหลือ"].includes(lower)) return replyFlex(env, replyToken, buildHelpFlex(), QR_MAIN);
   if (state && SHOWTIME_ACTIONS.has(state.action) && lower.startsWith("edit showtime")) return handleShowtimeText(text, userId, groupId, targetId, replyToken, state, env);
   if (lower === "edit" || lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env);
   if (state?.action === "export_history" && ["cancel", "exit", "ออก", "ยกเลิก"].includes(lower)) {
