@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTripDates } from "../src/worker";
+import { buildTripDatePickerMessage, parseTripDates } from "../src/worker";
 
 describe("parseTripDates", () => {
   it("parses a DD/MM/YYYY range", () => {
@@ -35,5 +35,33 @@ describe("parseTripDates", () => {
   it("ignores invalid month/day", () => {
     // 45/13/2026 -> invalid, no other date -> null
     expect(parseTripDates("45/13/2026")).toBeNull();
+  });
+});
+
+describe("buildTripDatePickerMessage", () => {
+  it("builds a LINE date picker for the trip start date", () => {
+    const message = buildTripDatePickerMessage("start");
+
+    expect(message).toMatchObject({
+      type: "text",
+      quickReply: { items: [
+        { action: { type: "datetimepicker", data: "trip_date=start", mode: "date" } },
+        { action: { text: "ข้าม" } },
+      ] },
+    });
+  });
+
+  it("prevents selecting an end date before the start date", () => {
+    const message = buildTripDatePickerMessage("end", {
+      initial: "2026-06-23",
+      min: "2026-06-23",
+    });
+
+    expect(message).toMatchObject({
+      quickReply: { items: [
+        { action: { data: "trip_date=end", initial: "2026-06-23", min: "2026-06-23" } },
+        { action: { text: "วันเดียว" } },
+      ] },
+    });
   });
 });

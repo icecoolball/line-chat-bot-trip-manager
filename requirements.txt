@@ -7,3 +7,4 @@ supabase
 pandas
 openpyxl
 APScheduler
+Pillow
