@@ -82,7 +82,14 @@ async function inspectSourceUrl(rawUrl, options = {}, redirects = 0) {
     const req = requestImpl(url, {
       method: "GET",
       headers: { "User-Agent": "ticket-concert-source-inspector/1.0", Accept: "text/html,text/plain;q=0.9,*/*;q=0.1" },
-      lookup: (_hostname, _options, callback) => callback(null, pinned.address, pinned.family),
+      // Node may request either a single pinned address or an all-address list.
+      lookup: (_hostname, lookupOptions, callback) => {
+        if (lookupOptions && lookupOptions.all) {
+          callback(null, [{ address: pinned.address, family: pinned.family }]);
+          return;
+        }
+        callback(null, pinned.address, pinned.family);
+      },
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();

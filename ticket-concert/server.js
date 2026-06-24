@@ -177,7 +177,9 @@ function createRequestHandler(options) {
       });
     } catch (error) {
       console.error("Request failed:", error.message);
-      sendJson(res, error.statusCode || 500, { ok: false, error: error.statusCode ? error.message : "Internal server error" });
+      const statusCode = error.statusCode || 500;
+      const exposeMessage = Boolean(error.statusCode) || req.url === "/api/source-inspect" || req.url.startsWith("/api/source-inspect?");
+      sendJson(res, statusCode, { ok: false, error: exposeMessage ? error.message : "Internal server error" });
     }
   };
 }
