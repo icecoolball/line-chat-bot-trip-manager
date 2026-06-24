@@ -7,6 +7,7 @@
 .env
 .env.local
 .env.*
+!ticket-concert/.env.example
 .dev.vars
 *.local.json
 schedules.local.json
@@ -20,6 +21,8 @@ ENV/
 bin/
 include/
 lib/
+!ticket-concert/lib/
+!ticket-concert/lib/**
 share/
 
 # --- 3. บล็อกไฟล์แคชระบบและหน่วยความจำเบื้องหลังที่คอมไพล์แล้ว ---

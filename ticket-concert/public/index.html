@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Family Ticket Reminder</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="page">
+    <section id="accessPanel" class="access-card hidden" aria-live="polite">
+      <p class="eyebrow">Family access</p>
+      <h1>ต้องเปิดจากลิงก์เชิญของครอบครัว</h1>
+      <p id="accessMessage">ลิงก์นี้ไม่มีรหัสเชิญ กรุณาขอลิงก์ใหม่จากเจ้าของระบบ</p>
+    </section>
+
+    <div id="appShell" class="hidden">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Family Ticket Reminder</p>
+          <h1>เช็กเวลาขาย แล้วให้ LINE เตือน</h1>
+          <p class="muted">เวลาแสดงเป็น Asia/Bangkok และระบบเตือนทำงานแยกจากหน้าเว็บ</p>
+        </div>
+        <div class="countdown-card">
+          <span id="countdown">--:--:--.---</span>
+          <small id="timeStatus">ยังไม่ได้ตั้งเวลา</small>
+        </div>
+      </header>
+
+      <section class="layout">
+        <form id="eventForm" class="panel" novalidate>
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Event</p>
+              <h2>ข้อมูลวันขายบัตร</h2>
+            </div>
+          </div>
+
+          <label>ชื่องาน
+            <input id="eventName" maxlength="120" required placeholder="เช่น Family Concert">
+          </label>
+          <label>เว็บไซต์
+            <select id="site">
+              <option>Eventpop</option>
+              <option>TICKETIER</option>
+              <option>All Ticket By Counter Service</option>
+              <option>The Concert</option>
+              <option>อื่น ๆ</option>
+            </select>
+          </label>
+          <label>URL งาน
+            <input id="eventUrl" type="url" required placeholder="https://...">
+          </label>
+          <label>เวลาเปิดขาย
+            <input id="saleTime" type="datetime-local" step="1" required>
+          </label>
+
+          <div class="button-row">
+            <button type="button" id="inspectSource">ตรวจเวลาเว็บต้นทาง</button>
+            <button type="button" id="openSite" class="secondary">เปิดหน้าเว็บ</button>
+          </div>
+          <p id="sourceStatus" class="note">ระบบจะอ่าน Date header และพยายามหาเวลาเปิดขายจากหน้าเว็บ</p>
+
+          <label>ข้อความเวลาจากหน้าเว็บ (ใช้เมื่ออ่าน URL ไม่ได้)
+            <textarea id="eventText" rows="3" placeholder="เช่น เปิดขาย 6 July 2026 เวลา 10:00"></textarea>
+          </label>
+          <button type="button" id="parseText" class="secondary">อ่านเวลาจากข้อความ</button>
+        </form>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">LINE reminders</p>
+              <h2>รายการเตือน</h2>
+            </div>
+            <button type="button" id="refreshSchedules" class="ghost">Refresh</button>
+          </div>
+          <p class="note">ส่งเข้ากลุ่มครอบครัวก่อนขาย 1 วัน, 1 ชั่วโมง, 30, 15 และ 5 นาที</p>
+          <button type="button" id="createSchedule">ตั้งเตือนงานนี้</button>
+          <div id="scheduleList" class="schedule-list" aria-live="polite"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
