@@ -7,9 +7,10 @@ import pandas as pd
 import requests
 from supabase import create_client
 
+from fallback_rates import FALLBACK_RATES
+
 
 # เรทเทียบบาทแบบคงที่ (fallback สุดท้ายถ้าดึงเรทเรียลไทม์ไม่ได้) — ตรงกับ src/worker.ts
-CURRENCY_RATES = {"THB": 1.0, "JPY": 0.23, "USD": 34.5, "KRW": 0.025}
 
 # map สกุลเงินที่สะกดผิด/ใช้ตัวย่อไม่มาตรฐาน ให้เป็นรหัส ISO ที่ถูกต้อง
 CURRENCY_ALIASES = {
@@ -77,7 +78,7 @@ def compute_thb(amount, currency):
     live_rate = fetch_fx_rate_to_thb(curr)
     if live_rate:
         return round(amount_val * live_rate, 2), live_rate, "er-api_export"
-    rate = CURRENCY_RATES.get(curr)
+    rate = FALLBACK_RATES.get(curr)
     if rate:
         return round(amount_val * rate, 2), rate, "fallback_export"
     # ไม่รู้จักสกุลนี้และดึงเรทไม่ได้ -> ไม่แปลง (กันได้เรท 1 มั่ว ๆ)

@@ -69,53 +69,7 @@ export const ISO_4217 = new Set<string>([
   "ZAR", "ZMW", "ZWL",
 ]);
 
-// ---------------------------------------------------------------------------
-// Fallback FX rates (THB per 1 unit of foreign currency).
-// These are approximate safety-net values; live rates override at runtime.
-// ---------------------------------------------------------------------------
-export const FALLBACK_RATES: Record<string, number> = {
-  THB: 1,
-  JPY: 0.23,
-  USD: 34.5,
-  KRW: 0.025,
-  EUR: 37.5,
-  GBP: 44,
-  CNY: 4.8,
-  HKD: 4.4,
-  TWD: 1.07,
-  SGD: 25.5,
-  MYR: 7.7,
-  VND: 0.0014,
-  LAK: 0.0016,
-  KHR: 0.0085,
-  MMK: 0.016,
-  IDR: 0.0021,
-  PHP: 0.6,
-  INR: 0.41,
-  AUD: 22.5,
-  NZD: 21,
-  CHF: 39,
-  CAD: 25,
-  AED: 9.4,
-  // Additional common travel currencies
-  SAR: 9.2,
-  QAR: 9.5,
-  TRY: 1.02,
-  RUB: 0.38,
-  ZAR: 1.85,
-  BRL: 6.8,
-  MXN: 1.95,
-  SEK: 3.25,
-  NOK: 3.2,
-  DKK: 5.05,
-  CZK: 1.55,
-  PLN: 8.8,
-  HUF: 0.095,
-  EGP: 0.7,
-  ILS: 9.5,
-  MOP: 4.28,
-  BND: 25.5,
-};
+export { FALLBACK_RATES } from "./fallback-rates";
 
 // ---------------------------------------------------------------------------
 // COUNTRY_TO_CURRENCY

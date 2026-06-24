@@ -1,5 +1,13 @@
 # Handoff — line-trip-bot (Trip Manager)
 
+## อัปเดตความปลอดภัย 2026-06-24
+
+- ลบข้อมูลทริปทดสอบเดิมแล้ว (`trips`, `expenses`, `daily_summaries`, `export_jobs` เหลือ 0)
+- `fx_rates` เปิด RLS และให้เข้าถึงผ่าน `SUPABASE_SERVICE_ROLE_KEY` เท่านั้น
+- เรทสำรองมี source of truth เดียวที่ `config/fallback-rates.json`; Worker และ Python export อ่านไฟล์เดียวกัน
+- debt เรื่องข้อมูล payer ของทริปเก่าและ fallback rates ซ้ำปิดแล้ว
+- ตรวจด้วย `npm test`, `npm run typecheck` และ `python -m unittest test/test_fallback_rates.py`
+
 อัปเดต: 2026-06-24
 
 LINE bot สำหรับจดค่าใช้จ่ายทริปในกลุ่ม → หารเงิน, หลายสกุลเงิน (แปลงบาทเรทสด), export Excel, สรุปรายวันอัตโนมัติ
