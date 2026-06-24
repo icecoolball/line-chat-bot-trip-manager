@@ -96,10 +96,25 @@ function parseDateTimeFromText(raw) {
     return Number.isFinite(date.getTime()) ? date : null;
   }
 
-  const months = { jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12 };
-  const named = text.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})[^\d]{0,20}(\d{1,2})[:.](\d{2})/i);
+  const months = {
+    jan: 1, january: 1, "ม.ค.": 1, มกราคม: 1,
+    feb: 2, february: 2, "ก.พ.": 2, กุมภาพันธ์: 2,
+    mar: 3, march: 3, "มี.ค.": 3, มีนาคม: 3,
+    apr: 4, april: 4, "เม.ย.": 4, เมษายน: 4,
+    may: 5, "พ.ค.": 5, พฤษภาคม: 5,
+    jun: 6, june: 6, "มิ.ย.": 6, มิถุนายน: 6,
+    jul: 7, july: 7, "ก.ค.": 7, กรกฎาคม: 7,
+    aug: 8, august: 8, "ส.ค.": 8, สิงหาคม: 8,
+    sep: 9, september: 9, "ก.ย.": 9, กันยายน: 9,
+    oct: 10, october: 10, "ต.ค.": 10, ตุลาคม: 10,
+    nov: 11, november: 11, "พ.ย.": 11, พฤศจิกายน: 11,
+    dec: 12, december: 12, "ธ.ค.": 12, ธันวาคม: 12,
+  };
+  const named = text.match(/(\d{1,2})\s+([A-Za-zก-๙.]+)\s+(\d{4})[^\d]{0,20}(\d{1,2})(?:[:.](\d{2}))?/i);
   if (!named || !months[named[2].toLowerCase()]) return null;
-  const date = new Date(`${named[3]}-${String(months[named[2].toLowerCase()]).padStart(2, "0")}-${String(named[1]).padStart(2, "0")}T${String(named[4]).padStart(2, "0")}:${named[5]}:00+07:00`);
+  const year = Number(named[3]) > 2500 ? Number(named[3]) - 543 : Number(named[3]);
+  const minute = named[5] || "00";
+  const date = new Date(`${String(year).padStart(4, "0")}-${String(months[named[2].toLowerCase()]).padStart(2, "0")}-${String(named[1]).padStart(2, "0")}T${String(named[4]).padStart(2, "0")}:${minute}:00+07:00`);
   return Number.isFinite(date.getTime()) ? date : null;
 }
 
