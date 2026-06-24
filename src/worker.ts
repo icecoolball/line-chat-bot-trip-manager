@@ -650,7 +650,7 @@ async function handleHistory(userId: string, groupId: string | null, targetId: s
   const body: FlexNode[] = [flexLabel("เลือกทริปเพื่อ export")];
   trips.forEach((t, i) => body.push(flexKV(`${i + 1}. ${t.title || "-"}`, t.status || "-")));
   const buttons = trips.slice(0, 4).map((t, i) => ({ label: `Excel: ${String(t.title || ("ทริป " + (i + 1))).slice(0, 18)}`, text: `excel ${i + 1}` }));
-  return replyAuto(env, replyToken, flexCard({ altText: `ประวัติทริปล่าสุด (${trips.length} ทริป) — พิมพ์ excel [เลข]`, title: "ประวัติทริป", body, buttons }), qr([["✖️ ออก", "exit"]]));
+  return replyAuto(env, replyToken, flexCard({ altText: `ประวัติทริปล่าสุด (${trips.length} ทริป) — พิมพ์ excel [เลข]`, title: "ประวัติทริป", body, buttons }), qr([["✖️ ออก", "exit", "cancel"]]));
 }
 
 async function handleExportHistoryChoice(text: string, userId: string, targetId: string, replyToken: string, state: BotState, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -818,15 +818,23 @@ async function replyAuto(env: Env, replyToken: string, msg: string | Record<stri
 }
 
 // ===== Quick Reply เมนูต่อโหมด =====
-function qr(pairs: Array<[string, string]>): Record<string, unknown> {
-  return { items: pairs.map(([label, text]) => ({ type: "action", action: { type: "message", label, text } })) };
+// ไอคอนสีอยู่ใน Supabase public bucket (สร้างด้วย scripts/setup_qr_icons.py)
+const QR_ICON_BASE = "https://zzglkhkyhkshjwbahuzv.supabase.co/storage/v1/object/public/trip-exports/qr";
+function qr(items: Array<[string, string, string?]>): Record<string, unknown> {
+  return {
+    items: items.map(([label, text, icon]) => ({
+      type: "action",
+      ...(icon ? { imageUrl: `${QR_ICON_BASE}/${icon}.png` } : {}),
+      action: { type: "message", label, text },
+    })),
+  };
 }
-const QR_MAIN = qr([["📅 ยอดวันนี้", "ยอดวันนี้"], ["💰 ยอดรวม", "ยอด"], ["📜 ประวัติ", "history"], ["🏁 จบทริป", "จบทริป"]]);
-const QR_NOTRIP = qr([["➕ สร้างทริป", "ทริป"], ["📜 ประวัติ", "history"], ["❓ ช่วยเหลือ", "help"]]);
-const QR_CANCEL = qr([["✖️ ยกเลิก", "ยกเลิก"]]);
-const QR_COUNTRY = qr([["🇹🇭 ไทย", "ไทย"], ["🇯🇵 ญี่ปุ่น", "ญี่ปุ่น"], ["🇰🇷 เกาหลี", "เกาหลี"], ["🇨🇳 จีน", "จีน"], ["✖️ ยกเลิก", "ยกเลิก"]]);
-const QR_SLIP_CONFIRM = qr([["✅ ใช่", "ใช่"], ["✖️ ยกเลิก", "ยกเลิก"]]);
-const QR_END_CONFIRM = qr([["✅ ยืนยัน", "ยืนยัน"], ["✖️ ยกเลิก", "ยกเลิก"]]);
+const QR_MAIN = qr([["📅 ยอดวันนี้", "ยอดวันนี้", "today"], ["💰 ยอดรวม", "ยอด", "sum"], ["📜 ประวัติ", "history", "history"], ["🏁 จบทริป", "จบทริป", "end"]]);
+const QR_NOTRIP = qr([["➕ สร้างทริป", "ทริป", "add"], ["📜 ประวัติ", "history", "history"], ["❓ ช่วยเหลือ", "help", "help"]]);
+const QR_CANCEL = qr([["✖️ ยกเลิก", "ยกเลิก", "cancel"]]);
+const QR_COUNTRY = qr([["🇹🇭 ไทย", "ไทย", "th"], ["🇯🇵 ญี่ปุ่น", "ญี่ปุ่น", "jp"], ["🇰🇷 เกาหลี", "เกาหลี", "kr"], ["🇨🇳 จีน", "จีน", "cn"], ["✖️ ยกเลิก", "ยกเลิก", "cancel"]]);
+const QR_SLIP_CONFIRM = qr([["✅ ใช่", "ใช่", "yes"], ["✖️ ยกเลิก", "ยกเลิก", "cancel"]]);
+const QR_END_CONFIRM = qr([["✅ ยืนยัน", "ยืนยัน", "yes"], ["✖️ ยกเลิก", "ยกเลิก", "cancel"]]);
 
 // ===== Flex helpers (การ์ดหัวสีม่วงให้เข้ากับเมนู showtime เดิม) =====
 const FLEX_ACCENT = "#7C3AED";
