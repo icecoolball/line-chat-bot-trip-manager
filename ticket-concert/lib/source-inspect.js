@@ -61,8 +61,8 @@ function extractLikelySaleText(html) {
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " "));
   const patterns = [
-    /(?:เปิดขาย|จำหน่าย|sale|on sale)[^.!?\n]{0,120}(?:\d{1,4}[-/. ]\d{1,2}[-/. ]\d{1,4}|\d{1,2}\s+[A-Za-zก-๙.]+\s+\d{2,4})[^.!?\n]{0,80}/i,
-    /(?:\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}|\d{1,2}\s+[A-Za-zก-๙.]+\s+\d{2,4})[^.!?\n]{0,60}\d{1,2}[:.]\d{2}(?::\d{2})?/i,
+    /(?:เปิดขาย|จำหน่าย|sale|on sale|public sale|pre-sale)[^.!?\n]{0,160}(?:\d{1,4}[-/. ]\d{1,2}[-/. ]\d{1,4}|\d{1,2}\s+[A-Za-zก-๙.]+\s+\d{2,4})[^.!?\n]{0,80}/i,
+    /(?:\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}|\d{1,2}\s+[A-Za-zก-๙.]+\s+\d{2,4})[^.!?\n]{0,60}(?:เวลา\s*)?\d{1,2}(?:[:.]\d{2})?(?::\d{2})?/i,
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -82,7 +82,6 @@ async function inspectSourceUrl(rawUrl, options = {}, redirects = 0) {
     const req = requestImpl(url, {
       method: "GET",
       headers: { "User-Agent": "ticket-concert-source-inspector/1.0", Accept: "text/html,text/plain;q=0.9,*/*;q=0.1" },
-      // Node may request either a single pinned address or an all-address list.
       lookup: (_hostname, lookupOptions, callback) => {
         if (lookupOptions && lookupOptions.all) {
           callback(null, [{ address: pinned.address, family: pinned.family }]);

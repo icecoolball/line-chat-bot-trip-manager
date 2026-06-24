@@ -97,24 +97,32 @@ function parseDateTimeFromText(raw) {
   }
 
   const months = {
-    jan: 1, january: 1, "ม.ค.": 1, มกราคม: 1,
-    feb: 2, february: 2, "ก.พ.": 2, กุมภาพันธ์: 2,
-    mar: 3, march: 3, "มี.ค.": 3, มีนาคม: 3,
-    apr: 4, april: 4, "เม.ย.": 4, เมษายน: 4,
-    may: 5, "พ.ค.": 5, พฤษภาคม: 5,
-    jun: 6, june: 6, "มิ.ย.": 6, มิถุนายน: 6,
-    jul: 7, july: 7, "ก.ค.": 7, กรกฎาคม: 7,
-    aug: 8, august: 8, "ส.ค.": 8, สิงหาคม: 8,
-    sep: 9, september: 9, "ก.ย.": 9, กันยายน: 9,
-    oct: 10, october: 10, "ต.ค.": 10, ตุลาคม: 10,
-    nov: 11, november: 11, "พ.ย.": 11, พฤศจิกายน: 11,
-    dec: 12, december: 12, "ธ.ค.": 12, ธันวาคม: 12,
+    jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5,
+    jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+    "ม.ค.": 1, "มกราคม": 1,
+    "ก.พ.": 2, "กุมภาพันธ์": 2,
+    "มี.ค.": 3, "มีนาคม": 3,
+    "เม.ย.": 4, "เมษายน": 4,
+    "พ.ค.": 5, "พฤษภาคม": 5,
+    "มิ.ย.": 6, "มิถุนายน": 6,
+    "ก.ค.": 7, "กรกฎาคม": 7,
+    "ส.ค.": 8, "สิงหาคม": 8,
+    "ก.ย.": 9, "กันยายน": 9,
+    "ต.ค.": 10, "ตุลาคม": 10,
+    "พ.ย.": 11, "พฤศจิกายน": 11,
+    "ธ.ค.": 12, "ธันวาคม": 12,
   };
-  const named = text.match(/(\d{1,2})\s+([A-Za-zก-๙.]+)\s+(\d{4})[^\d]{0,20}(\d{1,2})(?:[:.](\d{2}))?/i);
-  if (!named || !months[named[2].toLowerCase()]) return null;
-  const year = Number(named[3]) > 2500 ? Number(named[3]) - 543 : Number(named[3]);
-  const minute = named[5] || "00";
-  const date = new Date(`${String(year).padStart(4, "0")}-${String(months[named[2].toLowerCase()]).padStart(2, "0")}-${String(named[1]).padStart(2, "0")}T${String(named[4]).padStart(2, "0")}:${minute}:00+07:00`);
+  const named = text.match(/(\d{1,2})\s+([A-Za-zก-๙.]+)\s+(\d{2,4})(?:[^\d]{0,20}(\d{1,2})(?:[:.](\d{2}))?)?/i);
+  if (!named) return null;
+  const month = months[named[2].toLowerCase()];
+  if (!month) return null;
+  let year = Number(named[3]);
+  year = year > 2500 ? year - 543 : year;
+  if (year < 100) year += 2000;
+  const hour = named[4] ?? "0";
+  const minute = named[5] ?? "00";
+  const date = new Date(`${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(named[1]).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+07:00`);
   return Number.isFinite(date.getTime()) ? date : null;
 }
 
@@ -122,7 +130,9 @@ function updateSaleTarget() {
   const value = $("saleTime").value;
   saleTargetMs = value ? new Date(`${value}+07:00`).getTime() : null;
   alarmed = false;
-  $("timeStatus").textContent = saleTargetMs ? new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "medium", timeZone: TIME_ZONE }).format(saleTargetMs) : "ยังไม่ได้ตั้งเวลา";
+  $("timeStatus").textContent = saleTargetMs
+    ? new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "medium", timeZone: TIME_ZONE }).format(saleTargetMs)
+    : "ยังไม่ได้ตั้งเวลา";
 }
 
 function tick() {
@@ -251,25 +261,31 @@ async function createSchedule() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", async () => {
-  if (!await establishAccess()) {
-    $("accessPanel").classList.remove("hidden");
-    return;
-  }
-  $("appShell").classList.remove("hidden");
-  restoreState();
-  await loadSchedules();
-  setInterval(tick, 50);
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", async () => {
+    if (!await establishAccess()) {
+      $("accessPanel").classList.remove("hidden");
+      return;
+    }
+    $("appShell").classList.remove("hidden");
+    restoreState();
+    await loadSchedules();
+    setInterval(tick, 50);
 
-  for (const id of ["eventName", "site", "eventUrl", "saleTime"]) {
-    $(id).addEventListener("change", () => { saveState(); updateSaleTarget(); });
-  }
-  $("inspectSource").addEventListener("click", inspectSource);
-  $("parseText").addEventListener("click", parseManualText);
-  $("openSite").addEventListener("click", () => {
-    const url = $("eventUrl").value.trim();
-    if (url) window.open(url, "_blank", "noopener,noreferrer");
+    for (const id of ["eventName", "site", "eventUrl", "saleTime"]) {
+      $(id).addEventListener("change", () => { saveState(); updateSaleTarget(); });
+    }
+    $("inspectSource").addEventListener("click", inspectSource);
+    $("parseText").addEventListener("click", parseManualText);
+    $("openSite").addEventListener("click", () => {
+      const url = $("eventUrl").value.trim();
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+    });
+    $("createSchedule").addEventListener("click", createSchedule);
+    $("refreshSchedules").addEventListener("click", loadSchedules);
   });
-  $("createSchedule").addEventListener("click", createSchedule);
-  $("refreshSchedules").addEventListener("click", loadSchedules);
-});
+}
+
+if (typeof module !== "undefined") {
+  module.exports = { parseDateTimeFromText };
+}
