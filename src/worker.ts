@@ -137,12 +137,12 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
 
   if (text === "ทริป" || lower === "trip") {
     await setState(env, userId, groupId, "wait_trip_name", {});
-    return reply(env, replyToken, "กรุณาระบุชื่อทริป");
+    return reply(env, replyToken, "กรุณาระบุชื่อทริป", QR_CANCEL);
   }
   if (lower.startsWith("trip ") || text.startsWith("ทริป ")) {
     const name = text.replace(/^trip\s+/i, "").replace(/^ทริป\s+/, "").trim();
     await setState(env, userId, groupId, "wait_trip_currency", { trip_name: name });
-    return reply(env, replyToken, "ระบุประเทศของทริป เช่น ญี่ปุ่น / เกาหลี หรือพิมพ์รหัสสกุลเงิน เช่น JPY");
+    return reply(env, replyToken, "ระบุประเทศของทริป เช่น ญี่ปุ่น / เกาหลี หรือพิมพ์รหัสสกุลเงิน เช่น JPY", QR_COUNTRY);
   }
 
   if (state?.action === "wait_slip_confirm") return handleSlipConfirm(text, userId, replyToken, state, env);
@@ -159,8 +159,8 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
   if (state?.action === "export_history" && ["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
   if (state?.action === "export_history") return handleExportHistoryChoice(text, userId, targetId, replyToken, state, env, ctx);
 
-  if (["ยอด", "sum"].includes(lower)) return replyAuto(env, replyToken, await buildTripTotalMessage(env, userId, groupId));
-  if (["ยอดวันนี้", "today"].includes(lower)) return replyAuto(env, replyToken, await buildTodayMessage(env, userId, groupId));
+  if (["ยอด", "sum"].includes(lower)) return replyAuto(env, replyToken, await buildTripTotalMessage(env, userId, groupId), QR_MAIN);
+  if (["ยอดวันนี้", "today"].includes(lower)) return replyAuto(env, replyToken, await buildTodayMessage(env, userId, groupId), QR_MAIN);
   if (lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env);
   if (["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
   if (lower.startsWith("excel")) return handleExportCommand(userId, groupId, targetId, replyToken, env, ctx);
@@ -173,10 +173,10 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
     const nameWarnings = await findSimilarPeopleNames(env, trip.id, parsed.participants);
     if (nameWarnings.length) return reply(env, replyToken, buildSimilarNameWarning(nameWarnings));
     const saved = await saveExpense(env, trip.id, userId, parsed.payer, parsed.item, parsed.amount, parsed.currency, parsed.tag, parsed.participants);
-    return replyAuto(env, replyToken, buildSaveCard({ amount: parsed.amount, currency: parsed.currency, tag: parsed.tag, people: parsed.participants, payer: parsed.payer, id: saved?.id }));
+    return replyAuto(env, replyToken, buildSaveCard({ amount: parsed.amount, currency: parsed.currency, tag: parsed.tag, people: parsed.participants, payer: parsed.payer, id: saved?.id }), QR_MAIN);
   }
 
-  return reply(env, replyToken, "⚠️ ไม่เข้าใจคำสั่ง พิมพ์ help เพื่อดูคำสั่งทั้งหมด");
+  return reply(env, replyToken, "⚠️ ไม่เข้าใจคำสั่ง พิมพ์ help เพื่อดูคำสั่งทั้งหมด", trip ? QR_MAIN : QR_NOTRIP);
 }
 
 async function handleTripName(text: string, userId: string, groupId: string | null, replyToken: string, env: Env): Promise<void> {
@@ -184,14 +184,14 @@ async function handleTripName(text: string, userId: string, groupId: string | nu
     await clearState(env, userId);
     return reply(env, replyToken, "ยกเลิกการสร้างทริปแล้ว");
   }
-  if (!text) return reply(env, replyToken, "กรุณาระบุชื่อทริป");
+  if (!text) return reply(env, replyToken, "กรุณาระบุชื่อทริป", QR_CANCEL);
   await setState(env, userId, groupId, "wait_trip_currency", { trip_name: text });
-  return reply(env, replyToken, "ระบุประเทศของทริป เช่น ญี่ปุ่น / เกาหลี หรือพิมพ์รหัสสกุลเงิน เช่น JPY");
+  return reply(env, replyToken, "ระบุประเทศของทริป เช่น ญี่ปุ่น / เกาหลี หรือพิมพ์รหัสสกุลเงิน เช่น JPY", QR_COUNTRY);
 }
 
 async function handleTripCurrency(text: string, userId: string, groupId: string | null, replyToken: string, state: BotState, env: Env): Promise<void> {
   const currency = resolveBaseCurrency(text);
-  if (!currency) return reply(env, replyToken, "⚠️ ไม่รู้จักประเทศ/สกุลเงินนี้ ลองพิมพ์ชื่อประเทศ เช่น ญี่ปุ่น หรือรหัสสกุล เช่น JPY");
+  if (!currency) return reply(env, replyToken, "⚠️ ไม่รู้จักประเทศ/สกุลเงินนี้ ลองพิมพ์ชื่อประเทศ เช่น ญี่ปุ่น หรือรหัสสกุล เช่น JPY", QR_COUNTRY);
   const tripName = String(state.payload.trip_name || "").trim();
   await setState(env, userId, groupId, "wait_trip_start_date", { trip_name: tripName, base_currency: currency });
   return replyMessages(env, replyToken, [buildTripDatePickerMessage("start")]);
@@ -301,7 +301,7 @@ async function createTripFromDates(userId: string, groupId: string | null, reply
     const days = dates.end ? Math.round((Date.parse(dates.end) - Date.parse(dates.start)) / 86400000) + 1 : null;
     dateLine = `\nช่วง: ${dates.start}${dates.end ? ` ถึง ${dates.end}` : ""}${days ? ` (${days} วัน)` : ""}`;
   }
-  return reply(env, replyToken, `เริ่มทริปใหม่: ${tripName}\nสกุลเงินหลัก: ${currency}${dateLine}`);
+  return reply(env, replyToken, `เริ่มทริปใหม่: ${tripName}\nสกุลเงินหลัก: ${currency}${dateLine}`, QR_MAIN);
 }
 
 // คืน {start,end} (ISO) / {start:null,end:null} ถ้าข้าม / null ถ้าอ่านไม่ออก
@@ -342,7 +342,7 @@ async function handleImage(messageId: string, userId: string, groupId: string | 
   const current = state?.action === "wait_slip_payer" ? ((state.payload.message_ids as string[]) || []) : [];
   current.push(messageId);
   await setState(env, userId, groupId, "wait_slip_payer", { message_ids: current, trip_id: trip.id, base_currency: getTripBaseCurrency(trip), target_id: targetId });
-  return reply(env, replyToken, `รับสลิป/บิลแล้ว (${current.length} ใบ)\nพิมพ์ ผู้จ่าย #หมวด คนหาร...\nเช่น บอล #ค่าอาหาร บอล ปาค`);
+  return reply(env, replyToken, `รับสลิป/บิลแล้ว (${current.length} ใบ)\nพิมพ์ ผู้จ่าย #หมวด คนหาร...\nเช่น บอล #ค่าอาหาร บอล ปาค`, QR_CANCEL);
 }
 
 function waitUntilShowtimeImageOcr(ctx: ExecutionContext, env: Env, messageId: string, userId: string, groupId: string | null, targetId: string): void {
@@ -614,14 +614,14 @@ async function handleEditExpense(text: string, userId: string, groupId: string |
   const currency = rows[0].currency || "THB";
   const amountThb = await computeAmountThb(env, amount, currency);
   await supabasePatch(env, "expenses", { amount, amount_thb: amountThb.amount, exchange_rate_used: amountThb.rate, exchange_rate_source: amountThb.source }, [`id=eq.${id}`]);
-  return reply(env, replyToken, `แก้ไข ID ${String(id).padStart(4, "0")} เป็น ${amount.toLocaleString()} ${currency} แล้ว`);
+  return reply(env, replyToken, `แก้ไข ID ${String(id).padStart(4, "0")} เป็น ${amount.toLocaleString()} ${currency} แล้ว`, QR_MAIN);
 }
 
 async function handleEndTrip(userId: string, groupId: string | null, replyToken: string, env: Env): Promise<void> {
   const trip = await getActiveTrip(env, userId, groupId);
   if (!trip) return reply(env, replyToken, "ไม่มีทริปที่กำลังทำงานอยู่");
   await setState(env, userId, groupId, "wait_end_trip_confirm", { trip_id: trip.id });
-  return replyAuto(env, replyToken, await buildEndTripSummary(env, trip, { confirm: true }));
+  return replyAuto(env, replyToken, await buildEndTripSummary(env, trip, { confirm: true }), QR_END_CONFIRM);
 }
 
 async function handleEndTripConfirm(text: string, userId: string, groupId: string | null, replyToken: string, state: BotState, env: Env): Promise<void> {
@@ -634,13 +634,13 @@ async function handleEndTripConfirm(text: string, userId: string, groupId: strin
     if (!trip) return reply(env, replyToken, "⚠️ ไม่พบทริปนี้แล้ว");
     const summary = await buildEndTripSummary(env, trip);
     await supabasePatch(env, "trips", { status: "closed", currency_code: getTripBaseCurrency(trip) }, [`id=eq.${tripId}`]);
-    return replyAuto(env, replyToken, summary);
+    return replyAuto(env, replyToken, summary, QR_NOTRIP);
   }
   if (["ยกเลิก", "cancel", "exit", "ออก", "ไม่"].includes(lower)) {
     await clearState(env, userId);
-    return reply(env, replyToken, "ยกเลิกการจบทริปแล้ว ทริปยังเปิดอยู่");
+    return reply(env, replyToken, "ยกเลิกการจบทริปแล้ว ทริปยังเปิดอยู่", QR_MAIN);
   }
-  return reply(env, replyToken, "พิมพ์ ยืนยัน เพื่อจบทริป หรือ ยกเลิก");
+  return reply(env, replyToken, "พิมพ์ ยืนยัน เพื่อจบทริป หรือ ยกเลิก", QR_END_CONFIRM);
 }
 
 async function handleHistory(userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
@@ -650,7 +650,7 @@ async function handleHistory(userId: string, groupId: string | null, targetId: s
   const body: FlexNode[] = [flexLabel("เลือกทริปเพื่อ export")];
   trips.forEach((t, i) => body.push(flexKV(`${i + 1}. ${t.title || "-"}`, t.status || "-")));
   const buttons = trips.slice(0, 4).map((t, i) => ({ label: `Excel: ${String(t.title || ("ทริป " + (i + 1))).slice(0, 18)}`, text: `excel ${i + 1}` }));
-  return replyAuto(env, replyToken, flexCard({ altText: `ประวัติทริปล่าสุด (${trips.length} ทริป) — พิมพ์ excel [เลข]`, title: "ประวัติทริป", body, buttons }));
+  return replyAuto(env, replyToken, flexCard({ altText: `ประวัติทริปล่าสุด (${trips.length} ทริป) — พิมพ์ excel [เลข]`, title: "ประวัติทริป", body, buttons }), qr([["ออก", "exit"]]));
 }
 
 async function handleExportHistoryChoice(text: string, userId: string, targetId: string, replyToken: string, state: BotState, env: Env, ctx: ExecutionContext): Promise<void> {
@@ -778,16 +778,19 @@ async function verifyLineSignature(body: string, signature: string, secret: stri
   return btoa(String.fromCharCode(...new Uint8Array(digest))) === signature;
 }
 
-async function reply(env: Env, replyToken: string, text: string): Promise<void> {
-  await replyMessages(env, replyToken, [{ type: "text", text: truncateLineText(text) }]);
+async function reply(env: Env, replyToken: string, text: string, quick?: Record<string, unknown>): Promise<void> {
+  const msg: Record<string, unknown> = { type: "text", text: truncateLineText(text) };
+  if (quick) msg.quickReply = quick;
+  await replyMessages(env, replyToken, [msg]);
 }
 
-async function replyFlex(env: Env, replyToken: string, flex: Record<string, unknown>): Promise<void> {
+async function replyFlex(env: Env, replyToken: string, flex: Record<string, unknown>, quick?: Record<string, unknown>): Promise<void> {
+  const message = quick ? { ...flex, quickReply: quick } : flex;
   try {
-    await replyMessages(env, replyToken, [flex]);
+    await replyMessages(env, replyToken, [message]);
   } catch (error) {
     console.error("replyFlex failed, falling back to text", errorMessage(error));
-    await reply(env, replyToken, String(flex.altText || "ส่งการ์ดไม่ได้ ลองใหม่อีกครั้ง"));
+    await reply(env, replyToken, String(flex.altText || "ส่งการ์ดไม่ได้ ลองใหม่อีกครั้ง"), quick);
   }
 }
 
@@ -809,10 +812,21 @@ async function pushFlex(env: Env, to: string, flex: Record<string, unknown>): Pr
 }
 
 // ส่งแบบยืดหยุ่น: ถ้าเป็น object = Flex card, ถ้าเป็น string = ข้อความ
-async function replyAuto(env: Env, replyToken: string, msg: string | Record<string, unknown>): Promise<void> {
-  if (typeof msg === "string") await reply(env, replyToken, msg);
-  else await replyFlex(env, replyToken, msg);
+async function replyAuto(env: Env, replyToken: string, msg: string | Record<string, unknown>, quick?: Record<string, unknown>): Promise<void> {
+  if (typeof msg === "string") await reply(env, replyToken, msg, quick);
+  else await replyFlex(env, replyToken, msg, quick);
 }
+
+// ===== Quick Reply เมนูต่อโหมด =====
+function qr(pairs: Array<[string, string]>): Record<string, unknown> {
+  return { items: pairs.map(([label, text]) => ({ type: "action", action: { type: "message", label, text } })) };
+}
+const QR_MAIN = qr([["ยอดวันนี้", "ยอดวันนี้"], ["ยอดรวม", "ยอด"], ["ประวัติ", "history"], ["จบทริป", "จบทริป"]]);
+const QR_NOTRIP = qr([["➕ สร้างทริป", "ทริป"], ["ประวัติ", "history"], ["ช่วยเหลือ", "help"]]);
+const QR_CANCEL = qr([["ยกเลิก", "ยกเลิก"]]);
+const QR_COUNTRY = qr([["ไทย", "ไทย"], ["ญี่ปุ่น", "ญี่ปุ่น"], ["เกาหลี", "เกาหลี"], ["จีน", "จีน"], ["ยกเลิก", "ยกเลิก"]]);
+const QR_SLIP_CONFIRM = qr([["ใช่", "ใช่"], ["ยกเลิก", "ยกเลิก"]]);
+const QR_END_CONFIRM = qr([["ยืนยัน", "ยืนยัน"], ["ยกเลิก", "ยกเลิก"]]);
 
 // ===== Flex helpers (การ์ดหัวสีม่วงให้เข้ากับเมนู showtime เดิม) =====
 const FLEX_ACCENT = "#7C3AED";
