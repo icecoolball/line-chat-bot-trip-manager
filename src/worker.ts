@@ -829,8 +829,8 @@ function qr(items: Array<[string, string, string?]>): Record<string, unknown> {
     })),
   };
 }
-const QR_MAIN = qr([["📅 ยอดวันนี้", "ยอดวันนี้", "today"], ["💰 ยอดรวม", "ยอด", "sum"], ["📜 ประวัติ", "history", "history"], ["🏁 จบทริป", "จบทริป", "end"]]);
-const QR_NOTRIP = qr([["➕ สร้างทริป", "ทริป", "add"], ["📜 ประวัติ", "history", "history"], ["❓ ช่วยเหลือ", "help", "help"]]);
+const QR_MAIN = qr([["📋 เมนู", "เมนู", "menu"], ["➕ สร้างทริป", "ทริป", "add"], ["📅 ยอดวันนี้", "ยอดวันนี้", "today"], ["💰 ยอดรวม", "ยอด", "sum"], ["📜 ประวัติ", "history", "history"], ["🏁 จบทริป", "จบทริป", "end"]]);
+const QR_NOTRIP = qr([["📋 เมนู", "เมนู", "menu"], ["➕ สร้างทริป", "ทริป", "add"], ["📜 ประวัติ", "history", "history"], ["❓ ช่วยเหลือ", "help", "help"]]);
 const QR_CANCEL = qr([["✖️ ยกเลิก", "ยกเลิก", "cancel"]]);
 const QR_COUNTRY = qr([["🇹🇭 ไทย", "ไทย", "th"], ["🇯🇵 ญี่ปุ่น", "ญี่ปุ่น", "jp"], ["🇰🇷 เกาหลี", "เกาหลี", "kr"], ["🇨🇳 จีน", "จีน", "cn"], ["✖️ ยกเลิก", "ยกเลิก", "cancel"]]);
 const QR_SLIP_CONFIRM = qr([["✅ ใช่", "ใช่", "yes"], ["✖️ ยกเลิก", "ยกเลิก", "cancel"]]);

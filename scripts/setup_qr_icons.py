@@ -103,8 +103,17 @@ def glyph_dot(c):
     c.circle(48, 48, 10, WHITE)
 
 
+def glyph_grid(c):
+    for cy in (40, 56):
+        for cx in (40, 56):
+            for dy in range(-6, 7):
+                for dx in range(-6, 7):
+                    c.px(cx + dx, cy + dy, WHITE)
+
+
 # key: (สีวงกลม, ฟังก์ชันวาดสัญลักษณ์)
 ICONS = {
+    "menu": (PURPLE, glyph_grid),
     "today": (PURPLE, glyph_calendar),
     "sum": (TEAL, glyph_dot),
     "history": (GRAY, glyph_bars),
