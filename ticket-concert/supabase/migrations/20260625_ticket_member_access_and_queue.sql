@@ -93,7 +93,7 @@ begin
     raise insufficient_privilege using message = 'unauthorized';
   end if;
 
-  if exists (select 1 from public.ticket_access_members where status = 'active') then
+  if exists (select 1 from public.ticket_access_members as members where members.status = 'active') then
     return;
   end if;
 
@@ -302,7 +302,8 @@ returns table (
   read_ct integer,
   enqueued_at timestamptz,
   vt timestamptz,
-  message jsonb
+  message jsonb,
+  headers jsonb
 )
 language sql
 security definer
@@ -320,6 +321,10 @@ set search_path = public, pgmq
 as $$
   select pgmq.delete('ticket_reminders', p_message_id);
 $$;
+
+drop function if exists public.create_ticket_schedule(text, text, text, text, text, timestamptz);
+drop function if exists public.ticket_list_schedules(text);
+drop function if exists public.delete_ticket_schedule(text, text);
 
 create or replace function public.create_ticket_schedule(
   p_backend_credential text,
@@ -458,3 +463,6 @@ grant execute on function public.delete_ticket_schedule(text, text) to anon;
 grant execute on function public.ticket_get_reminder_job(bigint) to service_role;
 grant execute on function public.ticket_read_reminder_queue(integer, integer) to service_role;
 grant execute on function public.ticket_delete_reminder_queue_message(bigint) to service_role;
+
+
+
