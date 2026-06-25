@@ -25,6 +25,12 @@
 - `TICKET_BACKEND_TOKEN`: ค่าเดียวกับ `ticket_backend_token` ใน Supabase Vault; ใช้จำกัดสิทธิ์เฉพาะ ticket RPC
 - `NODE_ENV=production`
 
+## Deploy บน Render
+
+- Root Directory: `ticket-concert`
+- Build Command: `cd ticket-concert && npm ci`
+- Start Command: `cd ticket-concert && npm start`
+
 ## Supabase
 
 1. Apply `supabase/migrations/20260624_ticket_reminders.sql`
@@ -37,9 +43,12 @@
 ## ตรวจสอบ
 
 ```powershell
+npm audit
 npm test
 node --check server.js
 node --check public/app.js
 ```
 
 ก่อนใช้งานจริง ให้ตั้ง schedule ล่วงหน้า 7 นาทีและยืนยันว่า LINE ได้รับข้อความเตือน 5 นาทีเพียงครั้งเดียว
+
+ดูขั้นตอน deploy, rotate token, และ production smoke test เพิ่มเติมที่ [docs/operations.md](./docs/operations.md)
