@@ -1,16 +1,18 @@
 require("dotenv").config();
 
+const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const { createClient } = require("@supabase/supabase-js");
 const {
   createSession,
+  readSession,
   sessionCookie,
   sessionFromRequest,
   validateInvite,
-  verifySession,
 } = require("./lib/auth");
+const { createMemberStore } = require("./lib/member-store");
 const { inspectSourceUrl, validateHttpsUrl } = require("./lib/source-inspect");
 const { createScheduleStore } = require("./lib/schedule-store");
 
@@ -78,6 +80,10 @@ function isSecureRequest(req) {
   return process.env.NODE_ENV === "production" || req.headers["x-forwarded-proto"] === "https";
 }
 
+function issueInviteToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
 function validateSchedule(payload) {
   const name = String(payload.name || "").trim();
   const site = String(payload.site || "").trim();
@@ -96,6 +102,7 @@ function validateSchedule(payload) {
 function createRequestHandler(options) {
   const familyAccessToken = options.familyAccessToken;
   const scheduleStore = options.scheduleStore;
+  const memberStore = options.memberStore;
   const sourceInspector = options.sourceInspector || inspectSourceUrl;
   const loginFailures = new Map();
 
@@ -114,7 +121,11 @@ function createRequestHandler(options) {
           return sendJson(res, 429, { ok: false, error: "Too many attempts. Try again later." });
         }
         const body = await readJson(req);
-        if (!validateInvite(body.token, familyAccessToken)) {
+        let member = await memberStore.exchangeInvite(body.token);
+        if (!member && validateInvite(body.token, familyAccessToken)) {
+          member = await memberStore.bootstrapLegacyMember(body.token);
+        }
+        if (!member) {
           const count = state && state.windowStart > Date.now() - LOGIN_WINDOW_MS ? state.count + 1 : 1;
           loginFailures.set(address, {
             count,
@@ -124,17 +135,40 @@ function createRequestHandler(options) {
           return sendJson(res, 401, { ok: false, error: "Invalid invite link" });
         }
         loginFailures.delete(address);
-        const token = createSession(familyAccessToken);
+        const token = createSession(familyAccessToken, member.id);
         return sendJson(res, 200, { ok: true }, { "set-cookie": sessionCookie(token, isSecureRequest(req)) });
       }
 
-      const sessionValid = verifySession(sessionFromRequest(req), familyAccessToken);
+      const session = readSession(sessionFromRequest(req), familyAccessToken);
+      const activeMember = session ? await memberStore.getActiveMember(session.memberId) : null;
+      const sessionValid = Boolean(activeMember);
       if (url.pathname === "/api/session" && req.method === "GET") {
-        return sendJson(res, sessionValid ? 200 : 401, { ok: sessionValid });
+        return sendJson(res, sessionValid ? 200 : 401, sessionValid ? { ok: true, member: activeMember } : { ok: false });
       }
 
       if (url.pathname.startsWith("/api/") && !sessionValid) {
         return sendJson(res, 401, { ok: false, error: "Invite access is required" });
+      }
+
+      if (url.pathname === "/api/members" && req.method === "GET") {
+        return sendJson(res, 200, { ok: true, members: await memberStore.list(activeMember.id) });
+      }
+
+      if (url.pathname === "/api/members" && req.method === "POST") {
+        const body = await readJson(req);
+        const name = String(body.name || "").trim();
+        if (!name || name.length > 80) return sendJson(res, 400, { ok: false, error: "Member name must be 1-80 characters" });
+        const inviteToken = issueInviteToken();
+        const member = await memberStore.create(activeMember.id, name, inviteToken);
+        const inviteUrl = `${isSecureRequest(req) ? "https" : "http"}://${req.headers.host || "localhost"}/#invite=${encodeURIComponent(inviteToken)}`;
+        return sendJson(res, 201, { ok: true, member, inviteUrl });
+      }
+
+      if (url.pathname.startsWith("/api/members/") && req.method === "DELETE") {
+        const id = decodeURIComponent(url.pathname.slice("/api/members/".length));
+        if (!/^[0-9a-f-]{36}$/i.test(id)) return sendJson(res, 400, { ok: false, error: "Invalid member id" });
+        await memberStore.revoke(activeMember.id, id);
+        return sendJson(res, 200, { ok: true });
       }
 
       if (url.pathname === "/api/source-inspect" && req.method === "POST") {
@@ -144,18 +178,18 @@ function createRequestHandler(options) {
       }
 
       if (url.pathname === "/api/schedules" && req.method === "GET") {
-        return sendJson(res, 200, { ok: true, schedules: await scheduleStore.list() });
+        return sendJson(res, 200, { ok: true, schedules: await scheduleStore.list(activeMember.id) });
       }
 
       if (url.pathname === "/api/schedules" && req.method === "POST") {
         const payload = validateSchedule(await readJson(req));
-        return sendJson(res, 201, { ok: true, schedule: await scheduleStore.create(payload) });
+        return sendJson(res, 201, { ok: true, schedule: await scheduleStore.create(activeMember.id, payload) });
       }
 
       if (url.pathname.startsWith("/api/schedules/") && req.method === "DELETE") {
         const id = decodeURIComponent(url.pathname.slice("/api/schedules/".length));
         if (!/^[0-9a-f-]{36}$/i.test(id)) return sendJson(res, 400, { ok: false, error: "Invalid schedule id" });
-        await scheduleStore.remove(id);
+        await scheduleStore.remove(activeMember.id, id);
         return sendJson(res, 200, { ok: true });
       }
 
@@ -193,6 +227,7 @@ function createRuntimeHandler(env = process.env) {
   });
   return createRequestHandler({
     familyAccessToken: env.FAMILY_ACCESS_TOKEN,
+    memberStore: createMemberStore(supabase, env.TICKET_BACKEND_TOKEN),
     scheduleStore: createScheduleStore(supabase, env.TICKET_BACKEND_TOKEN),
   });
 }

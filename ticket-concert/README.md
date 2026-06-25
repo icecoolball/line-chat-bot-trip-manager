@@ -1,28 +1,28 @@
 # Family Ticket Reminder
 
-หน้าเว็บสำหรับครอบครัว ใช้ตรวจเวลาเว็บขายบัตร ตั้งเวลา countdown และสร้างรายการแจ้งเตือนเข้า LINE กลุ่มเดียว
+หน้าเว็บสำหรับครอบครัว ใช้ตรวจเวลาเว็บขายบัตร ตั้งเวลา countdown และส่งเตือนเข้า LINE โดยยังใช้สแต็กฟรีเดิมคือ Render + Supabase
 
 ## การทำงาน
 
-- เปิดครั้งแรกด้วยลิงก์ `https://YOUR_DOMAIN/#invite=FAMILY_ACCESS_TOKEN`
-- Browser แลก token เป็น HttpOnly cookie อายุ 30 วัน แล้วลบ token ออกจาก URL
-- Render ให้บริการ dashboard และ API เท่านั้น
-- Supabase Cron เรียก Edge Function ทุกนาทีเพื่อส่ง LINE ก่อนขาย 1 วัน, 1 ชั่วโมง, 30, 15 และ 5 นาที
-- เก็บเวลาในฐานข้อมูลเป็น UTC และแสดงหน้าเว็บเป็น `Asia/Bangkok`
+- สมาชิกแต่ละคนใช้ invite link ของตัวเองในรูป `https://YOUR_DOMAIN/#invite=PERSONAL_INVITE_TOKEN`
+- Browser แลก invite เป็น HttpOnly session cookie อายุ 30 วัน
+- Server ตรวจว่า member ยัง active อยู่ทุก request
+- Server สร้าง signed RPC credential อายุสั้นต่อ request ก่อนคุยกับ Supabase
+- Supabase Queue เก็บ reminder jobs และ Edge Function เป็นตัวส่ง LINE
 
 ## รันในเครื่อง
 
-1. คัดลอก `.env.example` เป็น `.env` และใส่ค่าจริง
-2. รัน `npm ci`
-3. รัน `npm start`
-4. เปิด `http://localhost:5177/#invite=FAMILY_ACCESS_TOKEN`
+1. คัดลอก `.env.example` เป็น `.env`
+2. ใส่ `FAMILY_ACCESS_TOKEN`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `TICKET_BACKEND_TOKEN`
+3. รัน `npm ci`
+4. รัน `npm start`
 
 ## Environment ของ Render
 
-- `FAMILY_ACCESS_TOKEN`: สุ่มอย่างน้อย 32 bytes; เปลี่ยนค่านี้เพื่อตัด session เดิมทุกเครื่อง
+- `FAMILY_ACCESS_TOKEN`: ใช้ sign session cookie และใช้เป็น legacy bootstrap token ชั่วคราวตอนย้ายจากของเดิม
 - `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`: publishable key ของโปรเจกต์ Trip-Manager
-- `TICKET_BACKEND_TOKEN`: ค่าเดียวกับ `ticket_backend_token` ใน Supabase Vault; ใช้จำกัดสิทธิ์เฉพาะ ticket RPC
+- `SUPABASE_ANON_KEY`
+- `TICKET_BACKEND_TOKEN`: shared signing secret สำหรับ signed RPC credential; ต้องตรงกับ secret `ticket_backend_token` ใน Supabase Vault
 - `NODE_ENV=production`
 
 ## Deploy บน Render
@@ -35,10 +35,11 @@
 
 1. Apply `supabase/migrations/20260624_ticket_reminders.sql`
 2. Apply `supabase/migrations/20260624_ticket_scoped_rpc.sql`
-3. Deploy `supabase/functions/ticket-reminders`
-4. เก็บ `ticket_line_token`, `ticket_line_target` และ `ticket_backend_token` ใน Supabase Vault
-5. เก็บ `ticket_project_url` และ `ticket_publishable_key` ใน Vault
-6. สร้าง Cron ชื่อ `ticket-reminders-every-minute` ให้เรียก Edge Function ทุกนาที
+3. Apply `supabase/migrations/20260625_ticket_member_access_and_queue.sql`
+4. เก็บ `ticket_line_token`, `ticket_line_target`, `ticket_backend_token` ใน Supabase Vault
+5. ตอน migration รอบแรก ให้เก็บ `ticket_legacy_bootstrap_secret` ใน Vault โดยใช้ค่าเดียวกับ `FAMILY_ACCESS_TOKEN` เดิม
+6. Deploy `supabase/functions/ticket-reminders`
+7. Cron ยังเรียก `ticket-reminders` ทุกนาทีเหมือนเดิม
 
 ## ตรวจสอบ
 
@@ -49,6 +50,4 @@ node --check server.js
 node --check public/app.js
 ```
 
-ก่อนใช้งานจริง ให้ตั้ง schedule ล่วงหน้า 7 นาทีและยืนยันว่า LINE ได้รับข้อความเตือน 5 นาทีเพียงครั้งเดียว
-
-ดูขั้นตอน deploy, rotate token, และ production smoke test เพิ่มเติมที่ [docs/operations.md](./docs/operations.md)
+ดูขั้นตอน bootstrap สมาชิกคนแรก, สร้าง invite ต่อคน, rotate secret, และ production smoke test ที่ [docs/operations.md](./docs/operations.md)

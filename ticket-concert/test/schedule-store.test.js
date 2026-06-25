@@ -38,7 +38,7 @@ test("maps database schedule and reminder state to the public API shape", () => 
   });
 });
 
-test("uses only scoped RPCs with the backend token", async () => {
+test("uses only scoped RPCs with signed backend credentials", async () => {
   const calls = [];
   const row = {
     id: "event-1",
@@ -59,20 +59,22 @@ test("uses only scoped RPCs with the backend token", async () => {
     },
   };
   const store = createScheduleStore(supabase, "backend-secret");
+  const memberId = "11111111-1111-4111-8111-111111111111";
 
-  await store.list();
-  await store.create({
+  await store.list(memberId);
+  await store.create(memberId, {
     name: row.name,
     site: row.site,
     url: row.url,
     saleAt: row.sale_at,
   });
-  await store.remove("00000000-0000-4000-8000-000000000000");
+  await store.remove(memberId, "00000000-0000-4000-8000-000000000000");
 
   assert.deepEqual(calls.map((call) => call.name), [
     "ticket_list_schedules",
     "create_ticket_schedule",
     "delete_ticket_schedule",
   ]);
-  assert.equal(calls.every((call) => call.parameters.p_backend_token === "backend-secret"), true);
+  assert.equal(calls.every((call) => typeof call.parameters.p_backend_credential === "string"), true);
+  assert.equal(calls.every((call) => call.parameters.p_backend_credential !== "backend-secret"), true);
 });

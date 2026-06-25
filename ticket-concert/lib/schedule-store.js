@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { createBackendCredential } = require("./backend-credential");
 
 function mapSchedule(row) {
   return {
@@ -20,20 +21,22 @@ function mapSchedule(row) {
   };
 }
 
-function createScheduleStore(supabase, backendToken) {
+function createScheduleStore(supabase, backendSecret) {
   return {
-    async list() {
+    async list(memberId) {
+      const credential = createBackendCredential(backendSecret, memberId, "ticket:schedules:list");
       const { data, error } = await supabase.rpc("ticket_list_schedules", {
-        p_backend_token: backendToken,
+        p_backend_credential: credential,
       });
       if (error) throw error;
       return (data || []).map(mapSchedule);
     },
 
-    async create(payload) {
+    async create(memberId, payload) {
       const id = crypto.randomUUID();
+      const credential = createBackendCredential(backendSecret, memberId, "ticket:schedules:create");
       const { data, error } = await supabase.rpc("create_ticket_schedule", {
-        p_backend_token: backendToken,
+        p_backend_credential: credential,
         p_id: id,
         p_name: payload.name,
         p_site: payload.site,
@@ -44,9 +47,10 @@ function createScheduleStore(supabase, backendToken) {
       return mapSchedule(Array.isArray(data) ? data[0] : data);
     },
 
-    async remove(id) {
+    async remove(memberId, id) {
+      const credential = createBackendCredential(backendSecret, memberId, "ticket:schedules:delete");
       const { error } = await supabase.rpc("delete_ticket_schedule", {
-        p_backend_token: backendToken,
+        p_backend_credential: credential,
         p_id: id,
       });
       if (error) throw error;

@@ -21,22 +21,32 @@ function validateInvite(candidate, secret) {
   return Boolean(secret && candidate && safeEqual(candidate, secret));
 }
 
-function createSession(secret, nowMs = Date.now()) {
+function createSession(secret, memberId, nowMs = Date.now()) {
   if (!secret) throw new Error("FAMILY_ACCESS_TOKEN is required");
-  const payload = encode(JSON.stringify({ version: 1, expiresAt: nowMs + SESSION_TTL_SECONDS * 1000 }));
+  if (!memberId) throw new Error("memberId is required");
+  const payload = encode(JSON.stringify({
+    version: 2,
+    memberId,
+    expiresAt: nowMs + SESSION_TTL_SECONDS * 1000,
+  }));
   return `${payload}.${sign(payload, secret)}`;
 }
 
-function verifySession(token, secret, nowMs = Date.now()) {
+function readSession(token, secret, nowMs = Date.now()) {
   if (!token || !secret) return false;
   const [payload, signature, extra] = String(token).split(".");
-  if (!payload || !signature || extra || !safeEqual(signature, sign(payload, secret))) return false;
+  if (!payload || !signature || extra || !safeEqual(signature, sign(payload, secret))) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return data.version === 1 && Number.isFinite(data.expiresAt) && data.expiresAt > nowMs;
+    if (data.version !== 2 || !data.memberId || !Number.isFinite(data.expiresAt) || data.expiresAt <= nowMs) return null;
+    return data;
   } catch {
-    return false;
+    return null;
   }
+}
+
+function verifySession(token, secret, nowMs = Date.now()) {
+  return Boolean(readSession(token, secret, nowMs));
 }
 
 function parseCookies(header = "") {
@@ -63,6 +73,7 @@ module.exports = {
   SESSION_TTL_SECONDS,
   createSession,
   parseCookies,
+  readSession,
   sessionCookie,
   sessionFromRequest,
   validateInvite,

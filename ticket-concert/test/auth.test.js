@@ -4,6 +4,7 @@ const {
   COOKIE_NAME,
   createSession,
   parseCookies,
+  readSession,
   sessionCookie,
   validateInvite,
   verifySession,
@@ -14,15 +15,16 @@ test("invite comparison and signed session lifecycle", () => {
   assert.equal(validateInvite("family-secret", "family-secret"), true);
   assert.equal(validateInvite("wrong", "family-secret"), false);
 
-  const token = createSession("family-secret", now);
+  const token = createSession("family-secret", "11111111-1111-4111-8111-111111111111", now);
   assert.equal(verifySession(token, "family-secret", now + 1000), true);
   assert.equal(verifySession(token, "rotated-secret", now + 1000), false);
   assert.equal(verifySession(token, "family-secret", now + 31 * 24 * 60 * 60 * 1000), false);
+  assert.equal(readSession(token, "family-secret", now + 1000).memberId, "11111111-1111-4111-8111-111111111111");
 });
 
 test("rotating the family invite secret invalidates existing sessions", () => {
   const now = Date.UTC(2026, 5, 24);
-  const token = createSession("family-secret", now);
+  const token = createSession("family-secret", "11111111-1111-4111-8111-111111111111", now);
   assert.equal(verifySession(token, "family-secret", now + 1000), true);
   assert.equal(verifySession(token, "family-secret-rotated", now + 1000), false);
 });
