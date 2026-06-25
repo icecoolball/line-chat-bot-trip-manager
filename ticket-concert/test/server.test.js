@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("http");
-const { createRequestHandler } = require("../server");
+const { createRequestHandler, createRuntimeHandler } = require("../server");
 
 async function withServer(run) {
   const schedules = [];
@@ -95,4 +95,12 @@ test("creates and deletes a schedule without accepting a LINE target", async () 
     const list = await fetch(`${baseUrl}/api/schedules`, { headers: { cookie } });
     assert.deepEqual((await list.json()).schedules, []);
   });
+});
+
+test("runtime startup requires the backend token secret", () => {
+  assert.throws(() => createRuntimeHandler({
+    FAMILY_ACCESS_TOKEN: "family-test-token",
+    SUPABASE_URL: "https://example.supabase.co",
+    SUPABASE_ANON_KEY: "anon-key",
+  }), /TICKET_BACKEND_TOKEN/);
 });

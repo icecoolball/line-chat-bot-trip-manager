@@ -12,4 +12,4 @@ ai_authored: true
 created: 2026-06-24
 ---
 
-Render authenticates ticket schedule RPCs with one shared high-entropy backend token stored in Supabase Vault. This limits exposure compared with a service-role key, but the token still grants all ticket schedule operations until it is rotated.
+Render still authenticates ticket schedule RPCs with one shared high-entropy backend token stored in Supabase Vault. Rotation steps now live in `docs/operations.md`, and tests verify that runtime startup fails when the token is missing while schedule RPCs always use the scoped backend token. The remaining debt is architectural: that single token still grants all ticket schedule operations until it is rotated.

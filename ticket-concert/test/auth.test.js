@@ -20,6 +20,13 @@ test("invite comparison and signed session lifecycle", () => {
   assert.equal(verifySession(token, "family-secret", now + 31 * 24 * 60 * 60 * 1000), false);
 });
 
+test("rotating the family invite secret invalidates existing sessions", () => {
+  const now = Date.UTC(2026, 5, 24);
+  const token = createSession("family-secret", now);
+  assert.equal(verifySession(token, "family-secret", now + 1000), true);
+  assert.equal(verifySession(token, "family-secret-rotated", now + 1000), false);
+});
+
 test("session cookie is HttpOnly and parsed safely", () => {
   const cookie = sessionCookie("abc.def", true);
   assert.match(cookie, new RegExp(`^${COOKIE_NAME}=`));

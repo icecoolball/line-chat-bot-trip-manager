@@ -12,4 +12,4 @@ ai_authored: true
 created: 2026-06-24
 ---
 
-Reminder delivery is coupled to Supabase Cron and one Edge Function. This keeps the free Render dashboard out of the timing path but should be revisited if volume or delivery guarantees grow beyond a family workload.
+Reminder delivery is still coupled to Supabase Cron and one Edge Function. The production smoke checklist now lives in `docs/operations.md`, including the 7-minute setup and single 5-minute delivery confirmation. The remaining debt is architectural: this runtime is still sized for family-scale traffic and should be revisited if volume or delivery guarantees grow.
