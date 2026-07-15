@@ -172,7 +172,7 @@ async function inspectSource() {
       ? `พบเวลาเปิดขายจาก “${data.matchedText}” · offset เว็บ ${Math.round(offsetMs)} ms`
       : `อ่านเวลา server ได้ แต่ยังหาเวลาเปิดขายไม่พบ · offset ${Math.round(offsetMs)} ms`;
   } catch (error) {
-    $("sourceStatus").textContent = `ตรวจเว็บต้นทางไม่ได้: ${error.message}`;
+    $("sourceStatus").textContent = `ตรวจเว็บต้นทางไม่ได้: ${error.message} — เปิดหน้าเว็บแล้วคัดลอกข้อความวันเวลาขายบัตร มาวางในช่องด้านล่าง แล้วกด “อ่านเวลาจากข้อความ” แทน`;
   }
 }
 

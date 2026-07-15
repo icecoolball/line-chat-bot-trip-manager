@@ -5,6 +5,8 @@ const net = require("net");
 const MAX_BYTES = 512 * 1024;
 const MAX_REDIRECTS = 3;
 const TIMEOUT_MS = 8000;
+const TOTAL_TIMEOUT_MS = 20000;
+const RETRYABLE_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ENETUNREACH", "ETIMEDOUT", "EPIPE"]);
 
 function isPrivateIpv4(address) {
   const parts = address.split(".").map(Number);
@@ -71,17 +73,21 @@ function extractLikelySaleText(html) {
   return "";
 }
 
-async function inspectSourceUrl(rawUrl, options = {}, redirects = 0) {
-  if (redirects > MAX_REDIRECTS) throw new Error("Too many redirects");
-  const url = validateHttpsUrl(rawUrl);
-  const addresses = await resolvePublicHost(url.hostname, options.lookup || dns.lookup);
-  const pinned = addresses[0];
+function isRetryableNetworkError(error) {
+  return Boolean(error) && (error.message === "Source request timed out" || RETRYABLE_CODES.has(error.code));
+}
+
+function requestOnce(url, pinned, options, timeoutMs) {
   const requestImpl = options.request || https.request;
 
   return new Promise((resolve, reject) => {
     const req = requestImpl(url, {
       method: "GET",
-      headers: { "User-Agent": "ticket-concert-source-inspector/1.0", Accept: "text/html,text/plain;q=0.9,*/*;q=0.1" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+        "Accept-Language": "th,en;q=0.8",
+      },
       lookup: (_hostname, lookupOptions, callback) => {
         if (lookupOptions && lookupOptions.all) {
           callback(null, [{ address: pinned.address, family: pinned.family }]);
@@ -92,8 +98,7 @@ async function inspectSourceUrl(rawUrl, options = {}, redirects = 0) {
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        const next = new URL(res.headers.location, url).toString();
-        inspectSourceUrl(next, options, redirects + 1).then(resolve, reject);
+        resolve({ redirect: new URL(res.headers.location, url).toString() });
         return;
       }
       if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -112,15 +117,40 @@ async function inspectSourceUrl(rawUrl, options = {}, redirects = 0) {
         chunks.push(chunk);
       });
       res.on("end", () => resolve({
-        finalUrl: url.toString(),
-        sourceDate: res.headers.date || null,
-        matchedText: extractLikelySaleText(Buffer.concat(chunks).toString("utf8")),
+        result: {
+          finalUrl: url.toString(),
+          sourceDate: res.headers.date || null,
+          matchedText: extractLikelySaleText(Buffer.concat(chunks).toString("utf8")),
+        },
       }));
     });
-    req.setTimeout(options.timeoutMs || TIMEOUT_MS, () => req.destroy(new Error("Source request timed out")));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error("Source request timed out")));
     req.on("error", reject);
     req.end();
   });
+}
+
+async function inspectSourceUrl(rawUrl, options = {}, redirects = 0, deadlineAt = null) {
+  if (redirects > MAX_REDIRECTS) throw new Error("Too many redirects");
+  if (deadlineAt === null) deadlineAt = Date.now() + (options.totalTimeoutMs || TOTAL_TIMEOUT_MS);
+  const url = validateHttpsUrl(rawUrl);
+  const addresses = await resolvePublicHost(url.hostname, options.lookup || dns.lookup);
+  const ordered = [...addresses].sort((a, b) => a.family - b.family);
+
+  let lastError = null;
+  for (const pinned of ordered) {
+    const timeoutMs = Math.min(options.timeoutMs || TIMEOUT_MS, deadlineAt - Date.now());
+    if (timeoutMs <= 0) break;
+    try {
+      const outcome = await requestOnce(url, pinned, options, timeoutMs);
+      if (outcome.redirect) return inspectSourceUrl(outcome.redirect, options, redirects + 1, deadlineAt);
+      return outcome.result;
+    } catch (error) {
+      if (!isRetryableNetworkError(error)) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Source request timed out");
 }
 
 module.exports = { extractLikelySaleText, inspectSourceUrl, isPrivateAddress, resolvePublicHost, validateHttpsUrl };
