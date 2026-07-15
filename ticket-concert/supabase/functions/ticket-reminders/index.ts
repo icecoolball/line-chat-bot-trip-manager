@@ -5,7 +5,7 @@ type QueueMessage = {
   read_ct: number;
   enqueued_at: string;
   vt: string;
-  message: { reminder_id?: number };
+  message: { reminder_id?: number; kind?: string; schedule_id?: string };
 };
 
 type ReminderJob = {
@@ -18,6 +18,14 @@ type ReminderJob = {
   offset_minutes: number;
   attempt_count: number;
   status: string;
+};
+
+type ScheduleSummary = {
+  schedule_id: string;
+  event_name: string;
+  event_site: string;
+  event_url: string;
+  sale_at: string;
 };
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -62,6 +70,15 @@ function formatMessage(job: ReminderJob): string {
   return `🔔 อีก ${labelForOffset(job.offset_minutes)} จะเปิดขายบัตร\n\n${job.event_name}\nเว็บไซต์: ${job.event_site}\nเวลา: ${saleAt}\n${job.event_url}`;
 }
 
+function formatConfirmation(summary: ScheduleSummary): string {
+  const saleAt = new Intl.DateTimeFormat("th-TH", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Bangkok",
+  }).format(new Date(summary.sale_at));
+  return `✅ ตั้งเตือนงานใหม่แล้ว\n\n${summary.event_name}\nเว็บไซต์: ${summary.event_site}\nเวลา: ${saleAt}\n${summary.event_url}\n\nจะเตือนก่อนขาย 1 วัน, 1 ชั่วโมง, 30, 15 และ 5 นาที`;
+}
+
 async function readQueue(limit: number): Promise<QueueMessage[]> {
   return await rpc<QueueMessage[]>("ticket_read_reminder_queue", {
     p_limit: limit,
@@ -78,6 +95,11 @@ async function loadReminderJob(reminderId: number): Promise<ReminderJob | null> 
   return rows?.[0] || null;
 }
 
+async function loadScheduleSummary(scheduleId: string): Promise<ScheduleSummary | null> {
+  const rows = await rpc<ScheduleSummary[]>("ticket_get_schedule_summary", { p_schedule_id: scheduleId });
+  return rows?.[0] || null;
+}
+
 async function updateReminder(id: number, values: Record<string, unknown>): Promise<void> {
   const response = await fetch(`${SUPABASE_URL}/rest/v1/schedule_reminders?id=eq.${id}`, {
     method: "PATCH",
@@ -87,7 +109,7 @@ async function updateReminder(id: number, values: Record<string, unknown>): Prom
   if (!response.ok) throw new Error(`update reminder ${id}: ${response.status} ${await response.text()}`);
 }
 
-async function sendLine(job: ReminderJob, lineConfig: { channel_access_token: string; target_id: string }): Promise<void> {
+async function sendLine(text: string, lineConfig: { channel_access_token: string; target_id: string }): Promise<void> {
   const response = await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
     headers: {
@@ -96,7 +118,7 @@ async function sendLine(job: ReminderJob, lineConfig: { channel_access_token: st
     },
     body: JSON.stringify({
       to: lineConfig.target_id,
-      messages: [{ type: "text", text: formatMessage(job) }],
+      messages: [{ type: "text", text }],
     }),
   });
   if (!response.ok) throw new Error(`LINE push: ${response.status} ${await response.text()}`);
@@ -115,6 +137,28 @@ Deno.serve(async (request) => {
     let failed = 0;
 
     for (const queueMessage of messages) {
+      if (queueMessage?.message?.kind === "schedule_created") {
+        const summary = queueMessage.message.schedule_id
+          ? await loadScheduleSummary(queueMessage.message.schedule_id)
+          : null;
+        if (!summary) {
+          await deleteQueueMessage(queueMessage.msg_id);
+          continue;
+        }
+        try {
+          await sendLine(formatConfirmation(summary), lineConfig);
+          await deleteQueueMessage(queueMessage.msg_id);
+          sent += 1;
+        } catch (error) {
+          console.error("confirmation send failed:", error);
+          if (queueMessage.read_ct >= MAX_ATTEMPTS) {
+            await deleteQueueMessage(queueMessage.msg_id);
+          }
+          failed += 1;
+        }
+        continue;
+      }
+
       const reminderId = Number(queueMessage?.message?.reminder_id);
       if (!Number.isFinite(reminderId)) {
         await deleteQueueMessage(queueMessage.msg_id);
@@ -133,7 +177,7 @@ Deno.serve(async (request) => {
           claimed_at: new Date().toISOString(),
           attempt_count: Math.max(job.attempt_count, queueMessage.read_ct),
         });
-        await sendLine(job, lineConfig);
+        await sendLine(formatMessage(job), lineConfig);
         await updateReminder(job.reminder_id, {
           status: "sent",
           sent_at: new Date().toISOString(),

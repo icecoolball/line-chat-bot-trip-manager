@@ -36,10 +36,11 @@
 1. Apply `supabase/migrations/20260624_ticket_reminders.sql`
 2. Apply `supabase/migrations/20260624_ticket_scoped_rpc.sql`
 3. Apply `supabase/migrations/20260625_ticket_member_access_and_queue.sql`
-4. เก็บ `ticket_line_token`, `ticket_line_target`, `ticket_backend_token` ใน Supabase Vault
-5. ตอน migration รอบแรก ให้เก็บ `ticket_legacy_bootstrap_secret` ใน Vault โดยใช้ค่าเดียวกับ `FAMILY_ACCESS_TOKEN` เดิม
-6. Deploy `supabase/functions/ticket-reminders`
-7. Cron ยังเรียก `ticket-reminders` ทุกนาทีเหมือนเดิม
+4. Apply `supabase/migrations/20260712_ticket_schedule_confirmation.sql`
+5. เก็บ `ticket_line_token`, `ticket_line_target`, `ticket_backend_token` ใน Supabase Vault
+6. ตอน migration รอบแรก ให้เก็บ `ticket_legacy_bootstrap_secret` ใน Vault โดยใช้ค่าเดียวกับ `FAMILY_ACCESS_TOKEN` เดิม
+7. Deploy `supabase/functions/ticket-reminders`
+8. Cron ยังเรียก `ticket-reminders` ทุกนาทีเหมือนเดิม
 
 ## ตรวจสอบ
 
