@@ -146,7 +146,8 @@ function createRuntimeHandler(env = process.env) {
   });
   return createRequestHandler({
     publicMemberId: env.PUBLIC_MEMBER_ID || PUBLIC_MEMBER_ID,
-    scheduleStore: createScheduleStore(supabase, env.TICKET_BACKEND_TOKEN),
+    // Render secrets can pick up invisible surrounding whitespace when pasted.
+    scheduleStore: createScheduleStore(supabase, env.TICKET_BACKEND_TOKEN.trim()),
   });
 }
 
