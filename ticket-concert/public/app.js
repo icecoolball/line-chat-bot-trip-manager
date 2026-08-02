@@ -16,40 +16,8 @@ function toast(message) {
 async function api(path, options = {}) {
   const response = await fetch(path, options);
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401) {
-    $("appShell").classList.add("hidden");
-    $("accessPanel").classList.remove("hidden");
-  }
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
-}
-
-function inviteFromFragment() {
-  const value = location.hash.startsWith("#invite=") ? location.hash.slice(8) : "";
-  return value ? decodeURIComponent(value) : "";
-}
-
-async function establishAccess() {
-  const invite = inviteFromFragment();
-  if (invite) {
-    history.replaceState(null, "", `${location.pathname}${location.search}`);
-    try {
-      await api("/api/session/invite", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: invite }),
-      });
-    } catch (error) {
-      $("accessMessage").textContent = `ลิงก์เชิญใช้ไม่ได้: ${error.message}`;
-      return false;
-    }
-  }
-  try {
-    await api("/api/session");
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function saveState() {
@@ -263,10 +231,6 @@ async function createSchedule() {
 
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", async () => {
-    if (!await establishAccess()) {
-      $("accessPanel").classList.remove("hidden");
-      return;
-    }
     $("appShell").classList.remove("hidden");
     restoreState();
     await loadSchedules();

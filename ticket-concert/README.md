@@ -1,31 +1,22 @@
 # Family Ticket Reminder
 
-หน้าเว็บสำหรับครอบครัว ใช้ตรวจเวลาเว็บขายบัตร ตั้งเวลา countdown และส่งเตือนเข้า LINE โดยยังใช้สแต็กฟรีเดิมคือ Render + Supabase
+Public family dashboard for checking ticket sale times, running a countdown, and scheduling LINE reminders with Render and Supabase.
 
-## การทำงาน
+## Access model
 
-- สมาชิกแต่ละคนใช้ invite link ของตัวเองในรูป `https://YOUR_DOMAIN/#invite=PERSONAL_INVITE_TOKEN`
-- Browser แลก invite เป็น HttpOnly session cookie อายุ 30 วัน
-- Server ตรวจว่า member ยัง active อยู่ทุก request
-- Server สร้าง signed RPC credential อายุสั้นต่อ request ก่อนคุยกับ Supabase
-- Supabase Queue เก็บ reminder jobs และ Edge Function เป็นตัวส่ง LINE
+- Open `https://YOUR_DOMAIN/` directly. There is no invite or login step.
+- Every request uses the shared active member configured by `PUBLIC_MEMBER_ID`.
+- The server issues short-lived scoped RPC credentials before accessing Supabase.
+- Anyone with the public URL can create or delete ticket reminders.
 
-## รันในเครื่อง
+## Local setup
 
-1. คัดลอก `.env.example` เป็น `.env`
-2. ใส่ `FAMILY_ACCESS_TOKEN`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `TICKET_BACKEND_TOKEN`
-3. รัน `npm ci`
-4. รัน `npm start`
+1. Copy `.env.example` to `.env`.
+2. Set `PUBLIC_MEMBER_ID`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `TICKET_BACKEND_TOKEN`.
+3. Run `npm ci`.
+4. Run `npm start` and open `http://localhost:5177/`.
 
-## Environment ของ Render
-
-- `FAMILY_ACCESS_TOKEN`: ใช้ sign session cookie และใช้เป็น legacy bootstrap token ชั่วคราวตอนย้ายจากของเดิม
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
-- `TICKET_BACKEND_TOKEN`: shared signing secret สำหรับ signed RPC credential; ต้องตรงกับ secret `ticket_backend_token` ใน Supabase Vault
-- `NODE_ENV=production`
-
-## Deploy บน Render
+## Render
 
 - Root Directory: `ticket-concert`
 - Build Command: `cd ticket-concert && npm ci`
@@ -33,22 +24,12 @@
 
 ## Supabase
 
-1. Apply `supabase/migrations/20260624_ticket_reminders.sql`
-2. Apply `supabase/migrations/20260624_ticket_scoped_rpc.sql`
-3. Apply `supabase/migrations/20260625_ticket_member_access_and_queue.sql`
-4. Apply `supabase/migrations/20260712_ticket_schedule_confirmation.sql`
-5. เก็บ `ticket_line_token`, `ticket_line_target`, `ticket_backend_token` ใน Supabase Vault
-6. ตอน migration รอบแรก ให้เก็บ `ticket_legacy_bootstrap_secret` ใน Vault โดยใช้ค่าเดียวกับ `FAMILY_ACCESS_TOKEN` เดิม
-7. Deploy `supabase/functions/ticket-reminders`
-8. Cron ยังเรียก `ticket-reminders` ทุกนาทีเหมือนเดิม
+Apply the migrations in `supabase/migrations/` in filename order. Keep `ticket_line_token`, `ticket_line_target`, and `ticket_backend_token` in Supabase Vault; the Render `TICKET_BACKEND_TOKEN` must match the Vault signing secret.
 
-## ตรวจสอบ
+## Verification
 
 ```powershell
-npm audit
 npm test
 node --check server.js
 node --check public/app.js
 ```
-
-ดูขั้นตอน bootstrap สมาชิกคนแรก, สร้าง invite ต่อคน, rotate secret, และ production smoke test ที่ [docs/operations.md](./docs/operations.md)

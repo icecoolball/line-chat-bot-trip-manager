@@ -1,7 +1,7 @@
 # 0005 - Member invite identities
 
 **Date:** 2026-06-25
-**Status:** Accepted
+**Status:** Superseded by ADR 0006
 
 ## Context
 
