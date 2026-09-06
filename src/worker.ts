@@ -1458,7 +1458,7 @@ async function buildEndTripSummary(env: Env, trip: Trip, opts: { confirm?: boole
 
   const paidEntries = Object.entries(paidByPerson).sort();
   if (paidEntries.length) {
-    body.push(flexSep(), flexLabel(deposits.length ? "ออกเงินสุทธิหลังหักมัดจำ" : "จ่ายไปแล้ว"));
+    body.push(flexSep(), flexLabel("เงินที่จ่ายไปแล้วหรือมัดจำ"));
     for (const [p, v] of paidEntries) body.push(flexKV(p, baht2(v)));
   }
 

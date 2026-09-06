@@ -329,7 +329,7 @@ def main():
             ptr = write_block(writer, summary_sheet, "สรุปรายวัน", daily_df, 0)
             ptr = write_block(writer, summary_sheet, "สรุปแปลงเป็นบาท", summary_df, ptr)
             if not paid_df.empty:
-                ptr = write_block(writer, summary_sheet, "ออกเงินสุทธิหลังหักมัดจำ" if deposits else "จ่ายไปแล้ว", paid_df, ptr)
+                ptr = write_block(writer, summary_sheet, "เงินที่จ่ายไปแล้วหรือมัดจำ", paid_df, ptr)
             write_block(writer, summary_sheet, "สรุปโอนเงิน", settle_df, ptr)
 
         with open(tmp_path, "rb") as f:
