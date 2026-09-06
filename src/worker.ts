@@ -5,6 +5,7 @@ import {
   normalizeCountryName,
   normalizeCurrencyCode,
 } from "./currency-by-country";
+import { applyDepositTransfers, buildDepositStatus, DEPOSIT_HELP, depositPeople, parseDepositCommand, type Deposit } from "./deposits";
 
 type Env = {
   LINE_CHANNEL_ACCESS_TOKEN: string;
@@ -106,7 +107,7 @@ async function handleLineEvent(event: any, env: Env, ctx: ExecutionContext): Pro
   if (event.type !== "message") return;
 
   if (event.message?.type === "text") {
-    await handleText(event.message.text || "", userId, groupId, targetId, event.replyToken, env, ctx);
+    await handleText(event.message.text || "", userId, groupId, targetId, event.replyToken, env, ctx, { id: event.webhookEventId, time: event.timestamp });
     return;
   }
   if (event.message?.type === "image") {
@@ -114,17 +115,21 @@ async function handleLineEvent(event: any, env: Env, ctx: ExecutionContext): Pro
   }
 }
 
-async function handleText(rawText: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env, ctx: ExecutionContext): Promise<void> {
+async function handleText(rawText: string, userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env, ctx: ExecutionContext, event: { id?: string; time?: number }): Promise<void> {
   const text = rawText.trim();
   const lower = text.toLowerCase();
-  const state = await getState(env, userId);
+  const storedState = await getState(env, userId);
+  // ประวัติ/ยืนยันจบทริปใช้ได้เฉพาะแชทที่เริ่มคำสั่ง ป้องกันส่งข้อมูลเงินข้ามกลุ่ม
+  const state = storedState && ["export_history","wait_end_trip_confirm"].includes(storedState.action) && (storedState.group_id || null) !== groupId ? null : storedState;
   DEFAULT_QUICK = state?.action === "export_history" ? qr([["✖️ ออก", "exit", "cancel"]]) : QR_MAIN;
 
   if (lower === "state") return reply(env, replyToken, buildStateText(state));
   if (["menu", "เมนู"].includes(lower)) return replyFlex(env, replyToken, buildMainMenuFlex(), QR_MAIN);
   if (["help", "ช่วยเหลือ"].includes(lower)) return replyFlex(env, replyToken, buildHelpFlex(), QR_MAIN);
   if (state && SHOWTIME_ACTIONS.has(state.action) && lower.startsWith("edit showtime")) return handleShowtimeText(text, userId, groupId, targetId, replyToken, state, env);
-  if (lower === "edit" || lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env);
+  if (lower === "edit" || lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env, event);
+  // แยกคำสั่งมัดจำก่อนตัวอ่านรายจ่าย เพื่อไม่ให้นับเงินโอนเป็นรายจ่ายใหม่
+  if (/^(?:มัดจำ|deposit)(?:\s|$)/i.test(text)) return handleDeposit(text,userId,groupId,replyToken,env,event);
   if (state?.action === "export_history" && ["cancel", "exit", "ออก", "ยกเลิก"].includes(lower)) {
     await clearState(env, userId);
     return reply(env, replyToken, "ออกจาก history แล้ว");
@@ -158,11 +163,11 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
   if (state?.action === "wait_end_trip_confirm") return handleEndTripConfirm(text, userId, groupId, replyToken, state, env);
   if (state && SHOWTIME_ACTIONS.has(state.action)) return handleShowtimeText(text, userId, groupId, targetId, replyToken, state, env);
   if (state?.action === "export_history" && ["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
-  if (state?.action === "export_history") return handleExportHistoryChoice(text, userId, targetId, replyToken, state, env, ctx);
+  if (state?.action === "export_history") return handleExportHistoryChoice(text, userId, groupId, targetId, replyToken, state, env, ctx);
 
   if (["ยอด", "sum"].includes(lower)) return replyAuto(env, replyToken, await buildTripTotalMessage(env, userId, groupId), QR_MAIN);
   if (["ยอดวันนี้", "today"].includes(lower)) return replyAuto(env, replyToken, await buildTodayMessage(env, userId, groupId), QR_MAIN);
-  if (lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env);
+  if (lower.startsWith("edit ")) return handleEditExpense(text, userId, groupId, replyToken, env, event);
   if (["history", "ประวัติ"].includes(lower)) return handleHistory(userId, groupId, targetId, replyToken, env);
   if (lower.startsWith("excel")) return handleExportCommand(userId, groupId, targetId, replyToken, env, ctx);
   if (["end trip", "จบทริป"].includes(lower)) return handleEndTrip(userId, groupId, replyToken, env);
@@ -177,7 +182,8 @@ async function handleText(rawText: string, userId: string, groupId: string | nul
     return replyAuto(env, replyToken, buildSaveCard({ amount: parsed.amount, currency: parsed.currency, tag: parsed.tag, people: parsed.participants, payer: parsed.payer, id: saved?.id }), QR_MAIN);
   }
 
-  return reply(env, replyToken, "⚠️ ไม่เข้าใจคำสั่ง พิมพ์ help เพื่อดูคำสั่งทั้งหมด", trip ? QR_MAIN : QR_NOTRIP);
+  // ข้อความที่ไม่ตรงคำสั่งเป็นบทสนทนาทั่วไป ไม่ส่งคำเตือนแทรกแชท
+  return;
 }
 
 async function handleTripName(text: string, userId: string, groupId: string | null, replyToken: string, env: Env): Promise<void> {
@@ -586,7 +592,45 @@ async function handleShowtimeText(text: string, userId: string, groupId: string 
   }
 }
 
-async function handleEditExpense(text: string, userId: string, groupId: string | null, replyToken: string, env: Env): Promise<void> {
+async function handleEditExpense(text: string, userId: string, groupId: string | null, replyToken: string, env: Env, event: { id?: string; time?: number }): Promise<void> {
+  // เปลี่ยนเฉพาะคนหาร: ฐานข้อมูลตรวจสิทธิ์และมัดจำภายใต้ล็อกเดียวกัน
+  const editPeople = text.match(/^edit\s+(\d+)\s+people(?:\s+([\s\S]*))?$/i);
+  if (editPeople) {
+    const id = Number(editPeople[1]);
+    const names = (editPeople[2] || "").trim().split(/\s+/).filter(Boolean);
+    if (!Number.isSafeInteger(id) || id < 1 || id > 2147483647 || !names.length || new Set(names).size !== names.length) {
+      return reply(env, replyToken, "กรุณาระบุคนหารไม่ซ้ำกัน เช่น edit 0197 people บอล ปาค มิน เอ้ ไท จอม");
+    }
+    if (!event.id || !Number.isSafeInteger(event.time) || event.time! <= 0) return reply(env, replyToken, "⚠️ ไม่มีข้อมูลยืนยันคำสั่งจาก LINE กรุณาส่งคำสั่งใหม่");
+    const trip = await getActiveTrip(env, userId, groupId);
+    if (!trip || (groupId && trip.line_group_id !== groupId)) return reply(env, replyToken, "ไม่มีทริปที่กำลังทำงานอยู่ในแชทนี้");
+    const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/set_expense_participants`, {
+      method: "POST", headers: supabaseHeaders(env), body: JSON.stringify({ p_expense_id: id, p_trip_id: trip.id, p_group_id: groupId, p_user_id: userId, p_names: names, p_event_id: event.id, p_event_time: event.time }),
+    });
+    if (!res.ok) {
+      const error = await res.json<{ code?: string }>();
+      return reply(env, replyToken, error.code === "22023" ? "⚠️ แก้คนหารไม่ได้: ตรวจชื่อซ้ำ หรือแก้มัดจำของชื่อที่จะเอาออกให้เป็น 0 ก่อน" : "⚠️ แก้คนหารไม่สำเร็จ ตรวจว่ารายการอยู่ในทริปนี้และทริปยังเปิดอยู่");
+    }
+    const result = await res.json<{ applied: boolean; expense: Expense }>();
+    const heading = result.applied ? `แก้คนหาร ID ${String(id).padStart(4, "0")} แล้ว` : "คำสั่งซ้ำหรือเก่ากว่า จึงคงคนหารปัจจุบัน";
+    return reply(env, replyToken, `${heading}\nหาร: ${participants(result.expense, result.expense.payer_name).join(" ")}\nยอดและผู้จ่ายเดิมไม่เปลี่ยน`, QR_MAIN);
+  }
+  // แก้ชื่อที่แสดงบนการ์ดและในรายงานพร้อมกัน โดยไม่แตะยอดหรือคนหาร
+  const rename = text.match(/^edit\s+(\d+)\s+name(?:\s+([\s\S]*))?$/i);
+  if (rename) {
+    const name = (rename[2] || "").trim().replace(/^#+/, "").trim();
+    if (!name) return reply(env, replyToken, "กรุณาระบุชื่อใหม่ เช่น edit 0206 name ค่าที่พัก");
+    const trip = await getActiveTrip(env, userId, groupId);
+    // ในกลุ่มต้องใช้ทริปของกลุ่มนี้เท่านั้น แม้ผู้ส่งจะมีทริปส่วนตัวอยู่
+    if (!trip || (groupId && trip.line_group_id !== groupId)) return reply(env, replyToken, "ไม่มีทริปที่กำลังทำงานอยู่ในแชทนี้");
+    const id = Number(rename[1]);
+    const filters = [`id=eq.${id}`, `trip_id=eq.${encodeURIComponent(trip.id)}`];
+    const rows = await supabaseSelect<Expense>(env, "expenses", "*", filters, "limit=1");
+    if (!rows.length) return reply(env, replyToken, "⚠️ ไม่พบรายการนี้ในทริปปัจจุบัน");
+    await supabasePatch(env, "expenses", { item_name: name, tag: `#${name}` }, filters);
+    return reply(env, replyToken, `แก้ชื่อ ID ${String(id).padStart(4, "0")} เป็น #${name} แล้ว`, QR_MAIN);
+  }
+
   const m = text.match(/^edit\s+(\d+)\s+(\d+(?:\.\d{1,2})?)/i);
   if (!m) {
     const trip = await getActiveTrip(env, userId, groupId);
@@ -607,7 +651,9 @@ async function handleEditExpense(text: string, userId: string, groupId: string |
       body.push(flexKV(`${id} ${tag}`, `${orig.toLocaleString()} ${currency} = ฿${thb}`));
       body.push({ type: "text", text: `จ่าย: ${payer} · หาร: ${people || "-"}`, size: "xxs", color: "#aaaaaa", wrap: true });
     }
-    body.push(flexSep(), { type: "text", text: `แก้ยอด: edit [ID] [ยอดใหม่]\nเช่น edit ${String(expenses[expenses.length - 1].id).padStart(4, "0")} 88`, size: "xs", color: "#888888", wrap: true });
+    // แยกคำสั่งแก้ยอด ชื่อรายการ และคนหารให้เห็นในจุดเลือกรายการ
+    const exampleId = String(expenses[expenses.length - 1].id).padStart(4, "0");
+    body.push(flexSep(), { type: "text", text: `แก้ยอด: edit [ID] [ยอดใหม่]\nเช่น edit ${exampleId} 88\nแก้ชื่อ: edit [ID] name [ชื่อใหม่]\nเช่น edit ${exampleId} name ค่าที่พัก\nแก้คนหาร: edit [ID] people [ชื่อคนหาร...]\nเช่น edit ${exampleId} people บอล ปาค มิน\nดูมัดจำ: มัดจำ [ID]\nวิธีบันทึก: พิมพ์ มัดจำ`, size: "xs", color: "#888888", wrap: true });
     return replyAuto(env, replyToken, flexCard({ altText: `รายการล่าสุดที่แก้ได้ (${recent.length} รายการ)`, title: "แก้ไขรายการ", body }));
   }
   const id = Number(m[1]);
@@ -620,9 +666,44 @@ async function handleEditExpense(text: string, userId: string, groupId: string |
   return reply(env, replyToken, `แก้ไข ID ${String(id).padStart(4, "0")} เป็น ${amount.toLocaleString()} ${currency} แล้ว`, QR_MAIN);
 }
 
+async function handleDeposit(text: string, userId: string, groupId: string | null, replyToken: string, env: Env, event: {id?:string;time?:number}): Promise<void> {
+  if (/^(?:มัดจำ|deposit)$/i.test(text)) return reply(env,replyToken,DEPOSIT_HELP);
+  const command = parseDepositCommand(text);
+  if (!command) return reply(env,replyToken,`⚠️ รูปแบบไม่ถูกต้อง\n${DEPOSIT_HELP}`);
+  const trip = await getActiveTrip(env,userId,groupId);
+  if (!trip || (groupId && trip.line_group_id !== groupId)) return reply(env,replyToken,"ไม่มีทริปที่กำลังทำงานอยู่ในแชทนี้");
+  const expenses = await supabaseSelect<Expense>(env,"expenses","*",[`id=eq.${command.id}`,`trip_id=eq.${encodeURIComponent(trip.id)}`],"limit=1");
+  const exp = expenses[0];
+  if (!exp) return reply(env,replyToken,"⚠️ ไม่พบรายการในทริปนี้");
+  if (command.amountMinor === undefined) {
+    const deposits = await getExpenseDeposits(env,trip.id,command.id);
+    return reply(env,replyToken,buildDepositStatus(exp as Parameters<typeof buildDepositStatus>[0],deposits));
+  }
+  const names = depositPeople(exp.participants,String(exp.payer_name || ""));
+  if (command.names!.some(name=>!names.includes(name))) return reply(env,replyToken,"⚠️ ชื่อผู้จ่ายต้องตรงกับคนหารในรายการ");
+  if (!names.includes(command.receiver!) && command.receiver !== exp.payer_name) return reply(env,replyToken,"⚠️ ชื่อผู้รับต้องเป็นคนหารหรือผู้จ่ายของรายการ");
+  if (!event.id || !Number.isSafeInteger(event.time) || event.time! <= 0) return reply(env,replyToken,"⚠️ ไม่มีข้อมูลยืนยันคำสั่งจาก LINE กรุณาส่งคำสั่งใหม่");
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/set_expense_deposits`,{
+    method:"POST",headers:supabaseHeaders(env),body:JSON.stringify({p_expense_id:command.id,p_group_id:groupId,p_user_id:userId,p_names:command.names,p_receiver:command.receiver,p_amount_minor:command.amountMinor,p_event_id:event.id,p_event_time:event.time}),
+  });
+  if (!res.ok) return reply(env,replyToken,"⚠️ บันทึกมัดจำไม่สำเร็จ กรุณาตรวจรายการและลองใหม่");
+  const result = await res.json<{applied_count:number;expense:Parameters<typeof buildDepositStatus>[0];deposits:Deposit[]}>();
+  const heading = result.applied_count ? "บันทึกยอดสะสมแล้ว (ไม่บวกซ้ำ)" : "คำสั่งซ้ำหรือเก่ากว่ายอดปัจจุบัน จึงคงยอดเดิม";
+  return reply(env,replyToken,`${heading}\n${buildDepositStatus(result.expense,result.deposits)}`);
+}
+
+async function getExpenseDeposits(env: Env, tripId: string | number, expenseId?: number): Promise<Deposit[]> {
+  // อ่านภาพรวมในครั้งเดียว ป้องกันข้อมูลขาดจากการแบ่งหน้าและยอดเปลี่ยนระหว่างอ่าน
+  const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/get_expense_deposits`,{
+    method:"POST",headers:supabaseHeaders(env),body:JSON.stringify({p_trip_id:tripId,p_expense_id:expenseId ?? null}),
+  });
+  if (!res.ok) throw new Error("อ่านข้อมูลมัดจำไม่สำเร็จ");
+  return res.json<Deposit[]>();
+}
+
 async function handleEndTrip(userId: string, groupId: string | null, replyToken: string, env: Env): Promise<void> {
   const trip = await getActiveTrip(env, userId, groupId);
-  if (!trip) return reply(env, replyToken, "ไม่มีทริปที่กำลังทำงานอยู่");
+  if (!trip || (groupId && trip.line_group_id !== groupId)) return reply(env, replyToken, "ไม่มีทริปที่กำลังทำงานอยู่ในแชทนี้");
   await setState(env, userId, groupId, "wait_end_trip_confirm", { trip_id: trip.id });
   return replyAuto(env, replyToken, await buildEndTripSummary(env, trip, { confirm: true }), QR_END_CONFIRM);
 }
@@ -631,12 +712,14 @@ async function handleEndTripConfirm(text: string, userId: string, groupId: strin
   const lower = text.trim().toLowerCase();
   if (["ยืนยัน", "yes", "ใช่", "ok", "confirm"].includes(lower)) {
     const tripId = String(state.payload.trip_id || "");
-    const trips = await supabaseSelect<Trip>(env, "trips", "*", [`id=eq.${tripId}`], "limit=1");
+    const trips = await supabaseSelect<Trip>(env, "trips", "*", [`id=eq.${encodeURIComponent(tripId)}`,...tripAccessFilters(userId,groupId)], "limit=1");
     const trip = trips[0];
-    await clearState(env, userId);
-    if (!trip) return reply(env, replyToken, "⚠️ ไม่พบทริปนี้แล้ว");
+    if (!trip) { await clearState(env, userId); return reply(env, replyToken, "⚠️ ไม่พบทริปนี้แล้ว"); }
+    // ปิดรับมัดจำ/แก้คนหารก่อนอ่านยอดสุดท้าย; UPDATE รอล็อกของรายการที่กำลังบันทึก
+    await supabasePatch(env, "trips", { status: "closed", currency_code: getTripBaseCurrency(trip) }, [`id=eq.${tripId}`, ...tripAccessFilters(userId, groupId)]);
     const summary = await buildEndTripSummary(env, trip);
-    await supabasePatch(env, "trips", { status: "closed", currency_code: getTripBaseCurrency(trip) }, [`id=eq.${tripId}`]);
+    // หากอ่านสรุปล้มเหลว คงสถานะยืนยันไว้ให้ลองอ่านทริปที่ปิดแล้วอีกครั้งได้
+    await clearState(env, userId);
     return replyAuto(env, replyToken, summary, QR_NOTRIP);
   }
   if (["ยกเลิก", "cancel", "exit", "ออก", "ไม่"].includes(lower)) {
@@ -647,7 +730,7 @@ async function handleEndTripConfirm(text: string, userId: string, groupId: strin
 }
 
 async function handleHistory(userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env): Promise<void> {
-  const trips = await supabaseSelect<Trip>(env, "trips", "*", [], "order=created_at.desc&limit=10");
+  const trips = await supabaseSelect<Trip>(env, "trips", "*", tripAccessFilters(userId,groupId), "order=created_at.desc&limit=10");
   if (!trips.length) return reply(env, replyToken, "ยังไม่มีประวัติทริป");
   await setState(env, userId, groupId, "export_history", { trips, target_id: targetId });
   const body: FlexNode[] = [flexLabel("เลือกทริปเพื่อ export")];
@@ -656,21 +739,28 @@ async function handleHistory(userId: string, groupId: string | null, targetId: s
   return replyAuto(env, replyToken, flexCard({ altText: `ประวัติทริปล่าสุด (${trips.length} ทริป) — พิมพ์ excel [เลข]`, title: "ประวัติทริป", body, buttons }), qr([["✖️ ออก", "exit", "cancel"]]));
 }
 
-async function handleExportHistoryChoice(text: string, userId: string, targetId: string, replyToken: string, state: BotState, env: Env, ctx: ExecutionContext): Promise<void> {
+function tripAccessFilters(userId: string, groupId: string | null): string[] {
+  return [groupId ? `line_group_id=eq.${encodeURIComponent(groupId)}` : `creator_id=eq.${encodeURIComponent(userId)}`];
+}
+
+async function handleExportHistoryChoice(text: string, userId: string, groupId: string | null, targetId: string, replyToken: string, state: BotState, env: Env, ctx: ExecutionContext): Promise<void> {
   const m = text.match(/^excel\s+(\d+)$/i) || text.match(/^(\d+)$/);
   if (!m) return reply(env, replyToken, "พิมพ์ excel [เลข] เช่น excel 1\nหรือพิมพ์ exit เพื่อออกจาก history");
   const idx = Number(m[1]) - 1;
   const trips = (state.payload.trips as Trip[]) || [];
   if (!trips[idx]) return reply(env, replyToken, "เลขไม่ถูกต้อง");
+  // ตรวจสิทธิ์ปัจจุบันอีกครั้ง ไม่เชื่อรายการทริปเก่าในสถานะสนทนา
+  const accessible = await supabaseSelect<Trip>(env,"trips","*",[`id=eq.${encodeURIComponent(trips[idx].id)}`,...tripAccessFilters(userId,groupId)],"limit=1");
+  if (!accessible.length) return reply(env,replyToken,"⚠️ ไม่พบทริปที่เข้าถึงได้ในแชทนี้");
   await clearState(env, userId);
-  const job = await createExportJob(env, trips[idx], String(state.payload.target_id || targetId), userId);
+  const job = await createExportJob(env, accessible[0], targetId, userId);
   dispatchExportJobInBackground(ctx, env, job);
   return reply(env, replyToken, `รับงาน export แล้ว: ${trips[idx].title}\nเสร็จแล้วจะส่งลิงก์กลับใน LINE`);
 }
 
 async function handleExportCommand(userId: string, groupId: string | null, targetId: string, replyToken: string, env: Env, ctx: ExecutionContext): Promise<void> {
   const trip = await getActiveTrip(env, userId, groupId);
-  if (!trip) return handleHistory(userId, groupId, targetId, replyToken, env);
+  if (!trip || (groupId && trip.line_group_id !== groupId)) return handleHistory(userId, groupId, targetId, replyToken, env);
   const job = await createExportJob(env, trip, targetId, userId);
   dispatchExportJobInBackground(ctx, env, job);
   return reply(env, replyToken, `รับงาน export แล้ว: ${trip.title}\nเสร็จแล้วจะส่งลิงก์กลับใน LINE`);
@@ -703,6 +793,8 @@ async function deleteSchedule(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleExportTrip(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  // HTTP export เป็นช่องทางระบบเท่านั้น ผู้ใช้ LINE ใช้คำสั่งที่ตรวจลายเซ็นแล้ว
+  if (!env.CRON_SECRET || request.headers.get("Authorization") !== `Bearer ${env.CRON_SECRET}`) return json({ok:false,error:"Unauthorized"},401);
   const data = await request.json<any>();
   const trip = await supabaseSelect<Trip>(env, "trips", "*", [`id=eq.${encodeURIComponent(data.tripId || "")}`], "limit=1");
   if (!trip.length) return json({ ok: false, error: "Trip not found" }, 404);
@@ -1344,7 +1436,8 @@ async function buildEndTripSummary(env: Env, trip: Trip, opts: { confirm?: boole
   if (!expenses.length) return opts.confirm ? `ทริป: ${trip.title}\nไม่มีรายการค่าใช้จ่าย — พิมพ์ ยืนยัน เพื่อปิดทริป หรือ ยกเลิก` : `ทริป: ${trip.title}\nไม่มีรายการค่าใช้จ่ายให้หาร`;
   let total = 0;
   const totalByPerson: Record<string, number> = {};
-  const paidByPerson: Record<string, number> = {};
+  const paidByPerson: Record<string, number> = Object.create(null);
+  const deposits = await getExpenseDeposits(env,trip.id);
   const rates = await getRatesForCurrencies(env, expenses.map((e) => e.currency || "THB"));
   for (const exp of expenses) {
     const amount = expenseThbLive(exp, rates);
@@ -1354,6 +1447,8 @@ async function buildEndTripSummary(env: Env, trip: Trip, opts: { confirm?: boole
     for (const p of people) totalByPerson[p] = (totalByPerson[p] || 0) + share;
     const payerName = String(exp.payer_name || "").trim();
     if (payerName) paidByPerson[payerName] = (paidByPerson[payerName] || 0) + amount;
+    const currency = normalizeCurrencyCode(exp.currency) || "THB";
+    applyDepositTransfers(paidByPerson,deposits.filter(d=>d.expense_id===exp.id),currency,rates.get(currency) ?? 1);
   }
 
   const body: FlexNode[] = [flexLabel("ยอดรวมทั้งทริป"), bigTotalNode(total)];
@@ -1363,7 +1458,7 @@ async function buildEndTripSummary(env: Env, trip: Trip, opts: { confirm?: boole
 
   const paidEntries = Object.entries(paidByPerson).sort();
   if (paidEntries.length) {
-    body.push(flexSep(), flexLabel("จ่ายไปแล้ว"));
+    body.push(flexSep(), flexLabel(deposits.length ? "ออกเงินสุทธิหลังหักมัดจำ" : "จ่ายไปแล้ว"));
     for (const [p, v] of paidEntries) body.push(flexKV(p, baht2(v)));
   }
 
@@ -1664,6 +1759,7 @@ function buildHelpFlex(): Record<string, unknown> {
           { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ยอดรวม", text: "ยอด" } },
           { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ยอดวันนี้", text: "ยอดวันนี้" } },
           { type: "button", style: "secondary", height: "md", action: { type: "message", label: "แก้ไขรายการ", text: "edit" } },
+          { type: "button", style: "secondary", height: "md", action: { type: "message", label: "มัดจำรายคน", text: "มัดจำ" } },
           { type: "button", style: "secondary", height: "md", action: { type: "message", label: "ประวัติ/Excel", text: "history" } },
           { type: "button", style: "secondary", height: "md", action: { type: "message", label: "Showtime", text: "showtime" } },
         ],

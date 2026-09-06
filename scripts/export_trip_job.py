@@ -158,6 +158,8 @@ def main():
             raise RuntimeError("trip not found")
         trip = trip_rows[0]
         expenses = supabase.table("expenses").select("*").eq("trip_id", trip_id).order("id", desc=False).execute().data or []
+        # อ่านมัดจำครบในภาพรวมเดียว ป้องกันทั้งเพดานแถวและยอดเปลี่ยนระหว่างแบ่งหน้า
+        deposits = supabase.rpc("get_expense_deposits", {"p_trip_id": trip_id, "p_expense_id": None}).execute().data or []
         if not expenses:
             raise RuntimeError("ไม่มีข้อมูลค่าใช้จ่ายในทริปนี้")
 
@@ -166,6 +168,7 @@ def main():
         grand_thb = 0.0
         paid_by_person = {}   # ผู้จ่าย -> ยอดบาทที่ออกจริง
         owed_by_person = {}   # คน -> ยอดบาทที่ต้องจ่าย (ส่วนแบ่ง)
+        deposit_rows = []
         for exp in expenses:
             date_text, time_text = thai_dt_text(exp.get("created_at"))
             participants = exp.get("participants") or []
@@ -182,6 +185,21 @@ def main():
             payer = exp.get("payer_name") or exp.get("line_user_id") or ""
             if payer:
                 paid_by_person[payer] = paid_by_person.get(payer, 0.0) + amount_thb
+            # เงินมัดจำคือเงินโอนให้คนรวบรวม หักจากผู้รับและเพิ่มให้ผู้โอนเท่ากัน
+            for deposit in (d for d in deposits if d["expense_id"] == exp["id"]):
+                if normalize_currency(deposit["currency"]) != currency or not isinstance(deposit["amount_minor"], int) or deposit["amount_minor"] < 0:
+                    raise ValueError("ข้อมูลมัดจำหรือสกุลเงินไม่ตรงกับรายการ")
+                contribution = deposit["amount_minor"] / 100
+                sender, receiver = deposit["payer_name"], deposit["receiver_name"]
+                if not rate:
+                    raise ValueError("ไม่พบเรทสำหรับคำนวณมัดจำ")
+                contribution_thb = contribution * rate
+                if sender != receiver:
+                    paid_by_person[sender] = paid_by_person.get(sender, 0.0) + contribution_thb
+                    paid_by_person[receiver] = paid_by_person.get(receiver, 0.0) - contribution_thb
+                deposit_rows.append({"ID รายการ": exp["id"], "รายการ": exp.get("item_name", ""),
+                                     "ผู้จ่าย": sender, "ผู้รับ": receiver, "ยอดสะสม": contribution,
+                                     "สกุล": currency, "ยอดเทียบบาท": round(contribution_thb, 2)})
             share = amount_thb / max(len(participants), 1)
             for p in participants:
                 owed_by_person[p] = owed_by_person.get(p, 0.0) + share
@@ -303,12 +321,15 @@ def main():
                 pd.DataFrame([{"_": "รวมวันนี้ (บาท)", "__": round(day_thb, 2)}]).to_excel(
                     writer, index=False, header=False, sheet_name=sheet, startrow=len(day_df) + 2, startcol=0
                 )
+            # แสดงมัดจำแยกจากรายจ่าย จึงไม่เพิ่มยอดค่าใช้จ่ายรวม
+            if deposit_rows:
+                pd.DataFrame(deposit_rows).to_excel(writer, index=False, sheet_name=safe_sheet("เงินมัดจำ"))
             # ชีตสุดท้าย: รวมทุกวัน
             summary_sheet = safe_sheet("รวมทุกวัน")
             ptr = write_block(writer, summary_sheet, "สรุปรายวัน", daily_df, 0)
             ptr = write_block(writer, summary_sheet, "สรุปแปลงเป็นบาท", summary_df, ptr)
             if not paid_df.empty:
-                ptr = write_block(writer, summary_sheet, "จ่ายไปแล้ว", paid_df, ptr)
+                ptr = write_block(writer, summary_sheet, "ออกเงินสุทธิหลังหักมัดจำ" if deposits else "จ่ายไปแล้ว", paid_df, ptr)
             write_block(writer, summary_sheet, "สรุปโอนเงิน", settle_df, ptr)
 
         with open(tmp_path, "rb") as f:
