@@ -1465,7 +1465,7 @@ async function buildEndTripSummary(env: Env, trip: Trip, opts: { confirm?: boole
   body.push(flexSep(), flexLabel("สรุปโอนเงิน 💸"));
   const transfers = computeSettlement(paidByPerson, totalByPerson);
   if (transfers.length) {
-    for (const t of transfers) body.push(flexKV(`${t.from} → ${t.to}`, baht2(t.amount), { bold: true, valueColor: FLEX_ACCENT }));
+    for (const t of transfers) body.push(flexKV(`${t.from} → ${t.to}`, baht2(t.amount), { bold: true, valueColor: "#DC2626" }));
   } else {
     body.push({ type: "text", text: "ไม่มียอดต้องโอน (จ่ายตรงกับที่ต้องจ่าย)", size: "sm", color: "#666666", wrap: true });
   }
